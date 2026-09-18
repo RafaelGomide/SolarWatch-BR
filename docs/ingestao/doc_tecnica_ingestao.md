@@ -75,8 +75,6 @@ SolarWatch-BR/
 
 Cada fonte é um **pacote Python** (tem `__init__.py`). Isso permite executá-las com `python -m ingestao.<fonte>.<script>` a partir da raiz e importar o módulo compartilhado `ingestao.http` sem manipular `sys.path`.
 
-> Sobre o nome da pasta ("scrapping"): nenhuma das três fontes exigiu *web scraping* (extrair dados de HTML). Todas oferecem APIs ou arquivos estruturados oficiais, o que é mais estável e mais correto do ponto de vista de termos de uso. O nome da pasta foi mantido como pedido.
-
 ---
 
 ## 3. Como executar
