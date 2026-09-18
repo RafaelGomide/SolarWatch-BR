@@ -1,15 +1,20 @@
-"""Ingestão da NASA POWER API — clima horário por coordenada.
+"""Ingestão da NASA POWER API — clima horário e diário por coordenada.
 
 Para cada local de `locais.csv` (polos de geração solar/eólica, com estado e
-subsistema para cruzar com os dados do ONS), baixa a série horária de:
+subsistema para cruzar com os dados do ONS), baixa duas séries:
 
-- ALLSKY_SFC_SW_DWN: irradiância global horizontal na superfície (Wh/m²)
-- WS10M / WS50M: velocidade do vento a 10 m e 50 m (m/s)
-- T2M: temperatura do ar a 2 m (°C)
+1. HORÁRIA (`dados/bruto/dados_nasa_bruto.parquet`), em UTC:
+   - ALLSKY_SFC_SW_DWN: irradiância global horizontal na superfície (Wh/m²)
+   - WS10M / WS50M: velocidade do vento a 10 m e 50 m (m/s)
+   - T2M: temperatura do ar a 2 m (°C)
+2. DIÁRIA (`dados/bruto/dados_nasa_diario_bruto.parquet`), em hora solar local (LST):
+   - ALLSKY_SFC_SW_DWN (kWh/m²/dia), WS10M, WS50M, T2M, T2M_MAX, T2M_MIN
 
-e consolida tudo, sem transformação, em `dados/bruto/dados_nasa_bruto.parquet`.
-Horários em UTC (o ONS publica em horário de Brasília; o alinhamento é feito
-na etapa de transformação). Valores ausentes vêm como -999 (fill value da API).
+Por que as duas: a irradiância HORÁRIA da NASA é publicada com ~3 meses de
+atraso (vem -999 no período recente), enquanto a DIÁRIA em LST fica disponível
+com poucos dias de atraso. Vento e temperatura horários atrasam só ~2 dias.
+
+Tudo é gravado sem transformação. Valores ausentes vêm como -999 (fill value da API).
 
 Uso:
     python -m ingestao.nasa_power.ingestao_nasa_power --inicio 2026-06 --fim 2026-08
@@ -36,14 +41,28 @@ from dotenv import load_dotenv
 from ingestao.armazenamento import gravar_parquet
 from ingestao.http import get_com_retry, nova_sessao
 
-API_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
-PARAMETROS = ["ALLSKY_SFC_SW_DWN", "WS10M", "WS50M", "T2M"]
+SERIES = {
+    "horaria": {
+        "url": "https://power.larc.nasa.gov/api/temporal/hourly/point",
+        "parametros": ["ALLSKY_SFC_SW_DWN", "WS10M", "WS50M", "T2M"],
+        "coluna_tempo": "data_hora_utc",
+        "extra": {"time-standard": "UTC"},
+    },
+    "diaria": {
+        "url": "https://power.larc.nasa.gov/api/temporal/daily/point",
+        "parametros": ["ALLSKY_SFC_SW_DWN", "WS10M", "WS50M", "T2M", "T2M_MAX", "T2M_MIN"],
+        "coluna_tempo": "data_lst",
+        # LST (padrão da API): em UTC a irradiância diária recente não é publicada
+        "extra": {"time-standard": "LST"},
+    },
+}
 COLUNAS_LOCAL = ["local", "municipio", "id_estado", "id_subsistema", "latitude", "longitude"]
 PAUSA_ENTRE_CHAMADAS_S = 1.0  # cortesia com a API pública
 
 RAIZ = Path(__file__).resolve().parents[2]
 LOCAIS = Path(__file__).resolve().parent / "locais.csv"
 SAIDA = RAIZ / "dados" / "bruto" / "dados_nasa_bruto.parquet"
+SAIDA_DIARIA = RAIZ / "dados" / "bruto" / "dados_nasa_diario_bruto.parquet"
 
 log = logging.getLogger("ingestao_nasa_power")
 
@@ -60,51 +79,54 @@ def _janelas_anuais(inicio: date, fim: date) -> list[tuple[date, date]]:
 
 
 def _baixar_local(
-    sessao: requests.Session, local: pd.Series, inicio: date, fim: date
+    sessao: requests.Session, local: pd.Series, inicio: date, fim: date, serie: str
 ) -> pd.DataFrame:
+    config = SERIES[serie]
     frames = []
     for ini_janela, fim_janela in _janelas_anuais(inicio, fim):
         resp = get_com_retry(
             sessao,
-            API_URL,
+            config["url"],
             params={
-                "parameters": ",".join(PARAMETROS),
+                "parameters": ",".join(config["parametros"]),
                 "community": "RE",
                 "latitude": local.latitude,
                 "longitude": local.longitude,
                 "start": ini_janela.strftime("%Y%m%d"),
                 "end": fim_janela.strftime("%Y%m%d"),
                 "format": "JSON",
-                "time-standard": "UTC",
+                **config["extra"],
             },
         )
         resp.raise_for_status()
-        serie = resp.json()["properties"]["parameter"]
-        # {"T2M": {"2026091000": 21.3, ...}, ...} -> uma linha por hora
-        df = pd.DataFrame(serie).rename_axis("data_hora_utc").reset_index()
+        valores = resp.json()["properties"]["parameter"]
+        # {"T2M": {"2026091000": 21.3, ...}, ...} -> uma linha por hora (ou dia)
+        df = pd.DataFrame(valores).rename_axis(config["coluna_tempo"]).reset_index()
         frames.append(df)
         time.sleep(PAUSA_ENTRE_CHAMADAS_S)
 
     df = pd.concat(frames, ignore_index=True)
     # Identificação do local primeiro, depois hora e parâmetros
     return df.assign(**{coluna: local[coluna] for coluna in COLUNAS_LOCAL})[
-        COLUNAS_LOCAL + ["data_hora_utc"] + PARAMETROS
+        COLUNAS_LOCAL + [config["coluna_tempo"]] + config["parametros"]
     ]
 
 
-def baixar(inicio: date, fim: date, saida: Path = SAIDA) -> Path:
+def baixar(inicio: date, fim: date) -> list[Path]:
     locais = pd.read_csv(LOCAIS, dtype={"latitude": float, "longitude": float})
     sessao = nova_sessao()
 
-    frames = []
-    for _, local in locais.iterrows():
-        log.info("Baixando %s (%.2f, %.2f) de %s a %s",
-                 local.local, local.latitude, local.longitude, inicio, fim)
-        df = _baixar_local(sessao, local, inicio, fim)
-        frames.append(df)
-        log.info("  %d linhas", len(df))
-
-    return gravar_parquet(pd.concat(frames, ignore_index=True), saida)
+    gravados = []
+    for serie, saida in [("horaria", SAIDA), ("diaria", SAIDA_DIARIA)]:
+        frames = []
+        for _, local in locais.iterrows():
+            log.info("Baixando série %s de %s (%.2f, %.2f) de %s a %s",
+                     serie, local.local, local.latitude, local.longitude, inicio, fim)
+            df = _baixar_local(sessao, local, inicio, fim, serie)
+            frames.append(df)
+            log.info("  %d linhas", len(df))
+        gravados.append(gravar_parquet(pd.concat(frames, ignore_index=True), saida))
+    return gravados
 
 
 def _mes(valor: str) -> date:

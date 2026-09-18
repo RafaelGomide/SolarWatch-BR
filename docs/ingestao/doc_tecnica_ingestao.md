@@ -27,7 +27,7 @@
 | Fonte | O que traz | Grão | Forma de acesso | Saída |
 |---|---|---|---|---|
 | **ONS** — Operador Nacional do Sistema Elétrico | Geração verificada (MWmed) por usina/conjunto, com subsistema, estado e tipo de fonte (hidráulica, térmica, eólica, fotovoltaica, nuclear) | usina × hora | API CKAN do portal (descoberta) + Parquets mensais no S3 | `dados/bruto/dados_ons_bruto.parquet` |
-| **NASA POWER** | Irradiância solar, vento a 10 m e 50 m, temperatura a 2 m | coordenada × hora (UTC) | API REST `temporal/hourly/point` | `dados/bruto/dados_nasa_bruto.parquet` |
+| **NASA POWER** | Irradiância solar, vento a 10 m e 50 m, temperatura a 2 m | coordenada × hora (UTC) **e** coordenada × dia (LST) | API REST `temporal/hourly/point` e `temporal/daily/point` | `dados/bruto/dados_nasa_bruto.parquet` + `dados/bruto/dados_nasa_diario_bruto.parquet` |
 | **ANEEL — SIGA** | Cadastro de empreendimentos solares (UFV) e eólicos (EOL): nome, CEG, potência, município, fase, data de entrada em operação, coordenadas | empreendimento | API CKAN `datastore_search` (paginada) | `dados/bruto/dados_aneel_bruto.parquet` |
 
 As três fontes são **públicas, gratuitas e sem autenticação**, o que é consistente com a restrição de orçamento zero do projeto (§14 do system design).
@@ -40,6 +40,7 @@ O objetivo analítico é cruzar **o que foi gerado** (ONS) com **as condições 
 |---|---|---|---|---|
 | `dados_ons_bruto.parquet` | 1.365.096 | ~10,4 MB | ~214 MB | 01/07/2026 00h → 17/09/2026 23h |
 | `dados_nasa_bruto.parquet` | 19.200 | ~0,1 MB | ~1,5 MB | 01/07/2026 00h → 18/09/2026 23h (UTC), 10 locais |
+| `dados_nasa_diario_bruto.parquet` | 800 | <0,1 MB | — | 01/07/2026 → 18/09/2026 (dias LST), 10 locais |
 | `dados_aneel_bruto.parquet` | 20.511 | ~0,8 MB | ~6 MB | retrato do cadastro em 18/09/2026 |
 
 A camada bruta começou em CSV e foi migrada para Parquet. Veja a [§4.5](#45-formato-de-saída-parquet).
@@ -71,6 +72,7 @@ SolarWatch-BR/
 │   └── bruto/                  # raw layer (NÃO versionado)
 │       ├── dados_ons_bruto.parquet
 │       ├── dados_nasa_bruto.parquet
+│       ├── dados_nasa_diario_bruto.parquet
 │       └── dados_aneel_bruto.parquet
 └── docs/ingestao/
     └── doc_tecnica_ingestao.md    # este documento
@@ -338,7 +340,9 @@ Arquivo: [`ingestao/nasa_power/ingestao_nasa_power.py`](../../../ingestao/nasa_p
 ### 7.1 A fonte
 
 - API: <https://power.larc.nasa.gov> (Prediction Of Worldwide Energy Resources), gratuita e sem chave
-- Endpoint: `GET https://power.larc.nasa.gov/api/temporal/hourly/point`
+- Endpoints:
+  - `GET https://power.larc.nasa.gov/api/temporal/hourly/point` (série **horária**, UTC)
+  - `GET https://power.larc.nasa.gov/api/temporal/daily/point` (série **diária**, LST)
 - Dados de reanálise e satélite (MERRA-2 / CERES) interpolados para qualquer coordenada. A resolução nativa é de cerca de 0,5° × 0,625°, então pontos próximos entre si podem devolver valores muito parecidos.
 
 ### 7.2 Parâmetros consultados
@@ -353,7 +357,10 @@ Arquivo: [`ingestao/nasa_power/ingestao_nasa_power.py`](../../../ingestao/nasa_p
 Parâmetros fixos da requisição:
 
 - `community=RE` (*Renewable Energy*): define unidades e convenções voltadas a energia renovável.
-- `time-standard=UTC`: pedido explicitamente. O padrão da API é **LST** (*Local Solar Time*), um horário solar que depende da longitude e **não** coincide com o horário de Brasília. Com UTC, a conversão para o fuso do ONS é determinística (−3 h).
+- `time-standard=UTC` (série horária): pedido explicitamente. O padrão da API é **LST** (*Local Solar Time*), um horário solar que depende da longitude e **não** coincide com o horário de Brasília. Com UTC, a conversão para o fuso do ONS é determinística (−3 h).
+- `time-standard=LST` (série diária): o dia é delimitado pela hora solar local. Nas longitudes do Brasil (−35° a −51°) ela fica a menos de 1 h do horário de Brasília, então o "dia LST" corresponde ao dia local. Foi escolhido porque, **com UTC, a API não publica a irradiância diária recente** (testado em 18/09/2026).
+
+**Série diária** (`dados_nasa_diario_bruto.parquet`): parâmetros `ALLSKY_SFC_SW_DWN` (em **kWh/m²/dia**), `WS10M`, `WS50M`, `T2M`, `T2M_MAX` e `T2M_MIN`, com a coluna de tempo `data_lst` (`AAAAMMDD`). Ela foi adicionada depois de descobrir que a **irradiância horária é publicada com ~3 meses de atraso** (ver [§7.8](#78-observações-de-qualidade-para-o-etl)). É a fonte da `fato_clima` (grão usina × dia) no ETL.
 - `format=JSON`: mais fácil de parsear de forma robusta do que o CSV da NASA, que vem com um cabeçalho textual de tamanho variável antes dos dados.
 
 ### 7.3 Escolha dos locais — `locais.csv`
@@ -395,6 +402,8 @@ main()
      │         │    └─ sleep(1 s)
      │         └─ concat janelas + colunas de identificação do local
      └─ concat locais → gravar_parquet → dados/bruto/dados_nasa_bruto.parquet
+         (o mesmo laço roda uma segunda vez para a série diária
+          → dados/bruto/dados_nasa_diario_bruto.parquet)
 ```
 
 ### 7.5 Janelas anuais: `_janelas_anuais`
@@ -436,7 +445,17 @@ Em seguida, `df.assign(**{coluna: local[coluna] ...})` acrescenta a identificaç
 
 ### 7.8 Observações de qualidade (para o ETL)
 
-- **`-999` = valor ausente** (`fill_value` informado no cabeçalho da resposta). A NASA POWER tem uma **latência de alguns dias** nos dados horários. Na execução de 17/09/2026, as últimas **48 horas** (16 e 17/09) vieram inteiras como `-999`, em todos os locais e parâmetros. O ETL precisa trocar `-999` por nulo **antes** de qualquer média, ou os agregados ficam destruídos.
+- **`-999` = valor ausente** (`fill_value` informado no cabeçalho da resposta). O ETL precisa trocar `-999` por nulo **antes** de qualquer média, ou os agregados ficam destruídos.
+- **Latência, que é diferente por parâmetro e por série:**
+
+  | Série | Parâmetro | Último dado válido (consulta de 18/09/2026) | Atraso |
+  |---|---|---|---|
+  | horária | vento, temperatura | 16/09 23h UTC | ~2 dias |
+  | horária | **irradiância** | **30/06/2026 23h UTC** | **~3 meses** |
+  | diária (LST) | vento, temperatura | ~16/09 | ~2 dias |
+  | diária (LST) | irradiância | ~06–13/09 (varia por local) | ~1 semana |
+
+  > **Correção:** uma versão anterior deste documento dizia que só as últimas 48 horas vinham `-999`. Isso vale para vento e temperatura. A checagem daquela época olhou só `T2M`, e a irradiância horária do período jul–set/2026 inteiro vem `-999`. Por isso a série diária foi adicionada.
 - **Irradiância zero à noite** é valor real, não ausência.
 - **Fuso:** para alinhar com o ONS, `hora_brasilia = data_hora_utc − 3 h`.
 
@@ -648,7 +667,7 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 | 2 | ~~Bruto em CSV~~ **Resolvido:** migrado para Parquet ([§4.5](#45-formato-de-saída-parquet)) | — | — |
 | 3 | `get_com_retry` repete erros `4xx` não-429 | Erro de parâmetro leva cerca de 30 s para ser reportado | Levantar imediatamente em `4xx` (exceto 429) |
 | 4 | Coordenadas de `locais.csv` definidas manualmente e aproximadas | Clima representativo do município, não da usina | Gerar `locais.csv` a partir das coordenadas da ANEEL (maiores usinas por UF) |
-| 5 | NASA: últimas ~48 h vêm `-999` | Janela recente sem clima | Tratar no ETL; opcionalmente cortar o `fim` padrão para "hoje − 3 dias" |
+| 5 | NASA: vento/temperatura atrasam ~2 dias; irradiância horária ~3 meses, diária ~1 semana | Janela recente sem clima | ETL trata como nulo com flag `faltante`; a `fato_clima` usa a série diária. Para análises horárias de irradiância, usar períodos com mais de 3 meses |
 | 6 | ANEEL é um retrato único, sobrescrito a cada execução | Perde-se o histórico de mudanças de fase (construção → operação) | Se a análise de sobrevivência precisar, arquivar retratos datados (`dados_aneel_bruto_AAAA-MM-DD.parquet`) |
 | 7 | Sem testes automatizados | Regressões silenciosas (como o bug da regex do ONS) | Testes unitários de `_meses`, `_janelas_anuais`, `PADRAO_MENSAL` e paginação da ANEEL com respostas simuladas (`pytest` + `responses`), conforme §13 do system design |
 | 8 | Três comandos separados | Fácil esquecer uma fonte | Um orquestrador `python -m ingestao` que rode as três fontes em sequência |
