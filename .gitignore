@@ -1,0 +1,15 @@
+# Segredos / variáveis de ambiente
+.env
+.env.*
+!.env.example
+
+# Dados brutos (reconstruíveis a partir das fontes públicas)
+dados/bruto/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
