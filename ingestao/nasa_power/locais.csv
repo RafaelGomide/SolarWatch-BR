@@ -1,0 +1,11 @@
+local,municipio,id_estado,id_subsistema,fonte_predominante,latitude,longitude
+pirapora_mg,Pirapora,MG,SE,solar,-17.35,-44.94
+janauba_mg,Janaúba,MG,SE,solar,-15.80,-43.31
+bom_jesus_da_lapa_ba,Bom Jesus da Lapa,BA,NE,solar,-13.25,-43.42
+sao_goncalo_do_gurgueia_pi,São Gonçalo do Gurguéia,PI,NE,solar,-10.03,-45.31
+ribeira_do_piaui_pi,Ribeira do Piauí,PI,NE,solar,-7.69,-42.71
+joao_camara_rn,João Câmara,RN,NE,eolica,-5.54,-35.82
+trairi_ce,Trairi,CE,NE,eolica,-3.28,-39.27
+parnaiba_pi,Parnaíba,PI,NE,eolica,-2.90,-41.78
+caetite_ba,Caetité,BA,NE,eolica,-14.07,-42.48
+osorio_rs,Osório,RS,S,eolica,-29.89,-50.27

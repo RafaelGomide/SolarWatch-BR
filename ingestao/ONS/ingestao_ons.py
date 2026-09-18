@@ -17,9 +17,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import random
 import re
-import time
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -27,6 +25,8 @@ from pathlib import Path
 import pandas as pd
 import requests
 from dotenv import load_dotenv
+
+from ingestao.http import get_com_retry, nova_sessao
 
 CKAN_URL = "https://dados.ons.org.br/api/3/action/package_show"
 DATASET_ID = "geracao-usina-2"
@@ -39,30 +39,7 @@ PADRAO_MENSAL = re.compile(r"GERACAO_USINA-2_(\d{4})_(\d{2})\.csv$")
 RAIZ = Path(__file__).resolve().parents[2]
 SAIDA = RAIZ / "dados" / "bruto" / "dados_ons_bruto.csv"
 
-MAX_TENTATIVAS = 5
-TIMEOUT_S = 120
-
 log = logging.getLogger("ingestao_ons")
-
-
-def _get_com_retry(sessao: requests.Session, url: str, **kwargs) -> requests.Response:
-    """GET com exponential backoff + jitter (GET é idempotente, retry é seguro)."""
-    for tentativa in range(1, MAX_TENTATIVAS + 1):
-        try:
-            resp = sessao.get(url, timeout=TIMEOUT_S, **kwargs)
-            if resp.status_code == 404:
-                return resp
-            if resp.status_code == 429 or resp.status_code >= 500:
-                raise requests.HTTPError(f"HTTP {resp.status_code}", response=resp)
-            resp.raise_for_status()
-            return resp
-        except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as erro:
-            if tentativa == MAX_TENTATIVAS:
-                raise
-            espera = min(2**tentativa, 60) + random.uniform(0, 1)
-            log.warning("Falha em %s (%s). Nova tentativa em %.1fs", url, erro, espera)
-            time.sleep(espera)
-    raise RuntimeError("inalcançável")
 
 
 def _meses(inicio: date, fim: date) -> list[tuple[int, int]]:
@@ -76,7 +53,7 @@ def _meses(inicio: date, fim: date) -> list[tuple[int, int]]:
 def _urls_disponiveis(sessao: requests.Session) -> dict[tuple[int, int], str]:
     """Lista os CSVs publicados via API CKAN do portal; cai no padrão de URL se falhar."""
     try:
-        resp = _get_com_retry(sessao, CKAN_URL, params={"id": DATASET_ID})
+        resp = get_com_retry(sessao, CKAN_URL, params={"id": DATASET_ID})
         recursos = resp.json()["result"]["resources"]
     except (requests.RequestException, KeyError, ValueError) as erro:
         log.warning("API CKAN indisponível (%s); usando padrão de URL do S3", erro)
@@ -96,15 +73,14 @@ def _parse_mes(valor: str) -> date:
 
 
 def baixar(inicio: date, fim: date, saida: Path = SAIDA) -> Path:
-    sessao = requests.Session()
-    sessao.headers["User-Agent"] = "SolarWatch-BR/ingestao (dados abertos ONS)"
+    sessao = nova_sessao()
     publicados = _urls_disponiveis(sessao)
 
     frames = []
     for ano, mes in _meses(inicio, fim):
         url = publicados.get((ano, mes), URL_ARQUIVO.format(ano=ano, mes=mes))
         log.info("Baixando %04d-%02d: %s", ano, mes, url)
-        resp = _get_com_retry(sessao, url)
+        resp = get_com_retry(sessao, url)
         if resp.status_code == 404:
             log.warning("%04d-%02d ainda não publicado, pulando", ano, mes)
             continue
