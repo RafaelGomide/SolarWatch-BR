@@ -7,7 +7,7 @@ subsistema para cruzar com os dados do ONS), baixa a série horária de:
 - WS10M / WS50M: velocidade do vento a 10 m e 50 m (m/s)
 - T2M: temperatura do ar a 2 m (°C)
 
-e consolida tudo, sem transformação, em `dados/bruto/dados_nasa_bruto.csv`.
+e consolida tudo, sem transformação, em `dados/bruto/dados_nasa_bruto.parquet`.
 Horários em UTC (o ONS publica em horário de Brasília; o alinhamento é feito
 na etapa de transformação). Valores ausentes vêm como -999 (fill value da API).
 
@@ -33,6 +33,7 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from ingestao.armazenamento import gravar_parquet
 from ingestao.http import get_com_retry, nova_sessao
 
 API_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
@@ -42,7 +43,7 @@ PAUSA_ENTRE_CHAMADAS_S = 1.0  # cortesia com a API pública
 
 RAIZ = Path(__file__).resolve().parents[2]
 LOCAIS = Path(__file__).resolve().parent / "locais.csv"
-SAIDA = RAIZ / "dados" / "bruto" / "dados_nasa_bruto.csv"
+SAIDA = RAIZ / "dados" / "bruto" / "dados_nasa_bruto.parquet"
 
 log = logging.getLogger("ingestao_nasa_power")
 
@@ -103,14 +104,7 @@ def baixar(inicio: date, fim: date, saida: Path = SAIDA) -> Path:
         frames.append(df)
         log.info("  %d linhas", len(df))
 
-    bruto = pd.concat(frames, ignore_index=True)
-    saida.parent.mkdir(parents=True, exist_ok=True)
-    # Build-then-swap: escreve em arquivo temporário e substitui atomicamente
-    temporario = saida.with_suffix(".csv.tmp")
-    bruto.to_csv(temporario, index=False, encoding="utf-8")
-    os.replace(temporario, saida)
-    log.info("Gravado %s (%d linhas)", saida, len(bruto))
-    return saida
+    return gravar_parquet(pd.concat(frames, ignore_index=True), saida)
 
 
 def _mes(valor: str) -> date:

@@ -1,9 +1,13 @@
 """Ingestão do ONS Dados Abertos — Geração por Usina em Base Horária.
 
-Baixa os CSVs mensais do dataset `geracao-usina-2` (geração horária por usina,
+Baixa os arquivos Parquet mensais do dataset `geracao-usina-2` (geração horária por usina,
 com subsistema, estado e tipo de fonte: eólica, fotovoltaica, hidráulica,
 térmica, nuclear) e consolida tudo, sem transformação, em
-`dados/bruto/dados_ons_bruto.csv`.
+`dados/bruto/dados_ons_bruto.parquet`.
+
+O ONS publica o mesmo dado em CSV (~70 MB/mês) e Parquet (~4,6 MB/mês); o
+Parquet é usado por ser ~15x menor e já vir tipado pela própria fonte
+(`din_instante` timestamp, `val_geracao` double, demais colunas texto).
 
 Uso:
     python -m ingestao.ONS.ingestao_ons --inicio 2026-06 --fim 2026-08
@@ -26,18 +30,19 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from ingestao.armazenamento import gravar_parquet
 from ingestao.http import get_com_retry, nova_sessao
 
 CKAN_URL = "https://dados.ons.org.br/api/3/action/package_show"
 DATASET_ID = "geracao-usina-2"
 URL_ARQUIVO = (
     "https://ons-aws-prod-opendata.s3.amazonaws.com/dataset/"
-    "geracao_usina_2_ho/GERACAO_USINA-2_{ano}_{mes:02d}.csv"
+    "geracao_usina_2_ho/GERACAO_USINA-2_{ano}_{mes:02d}.parquet"
 )
-PADRAO_MENSAL = re.compile(r"GERACAO_USINA-2_(\d{4})_(\d{2})\.csv$")
+PADRAO_MENSAL = re.compile(r"GERACAO_USINA-2_(\d{4})_(\d{2})\.parquet$")
 
 RAIZ = Path(__file__).resolve().parents[2]
-SAIDA = RAIZ / "dados" / "bruto" / "dados_ons_bruto.csv"
+SAIDA = RAIZ / "dados" / "bruto" / "dados_ons_bruto.parquet"
 
 log = logging.getLogger("ingestao_ons")
 
@@ -51,7 +56,7 @@ def _meses(inicio: date, fim: date) -> list[tuple[int, int]]:
 
 
 def _urls_disponiveis(sessao: requests.Session) -> dict[tuple[int, int], str]:
-    """Lista os CSVs publicados via API CKAN do portal; cai no padrão de URL se falhar."""
+    """Lista os Parquets publicados via API CKAN do portal; cai no padrão de URL se falhar."""
     try:
         resp = get_com_retry(sessao, CKAN_URL, params={"id": DATASET_ID})
         recursos = resp.json()["result"]["resources"]
@@ -84,8 +89,8 @@ def baixar(inicio: date, fim: date, saida: Path = SAIDA) -> Path:
         if resp.status_code == 404:
             log.warning("%04d-%02d ainda não publicado, pulando", ano, mes)
             continue
-        # Mantém tudo como texto: camada bruta não interpreta tipos
-        df = pd.read_csv(BytesIO(resp.content), sep=";", dtype=str, keep_default_na=False)
+        # Tipos como publicados pelo ONS; nenhuma conversão adicional
+        df = pd.read_parquet(BytesIO(resp.content), engine="pyarrow")
         df["arquivo_origem"] = url.rsplit("/", 1)[-1]
         frames.append(df)
         log.info("  %d linhas", len(df))
@@ -93,14 +98,7 @@ def baixar(inicio: date, fim: date, saida: Path = SAIDA) -> Path:
     if not frames:
         raise SystemExit("Nenhum arquivo baixado para o período informado.")
 
-    bruto = pd.concat(frames, ignore_index=True)
-    saida.parent.mkdir(parents=True, exist_ok=True)
-    # Build-then-swap: escreve em arquivo temporário e substitui atomicamente
-    temporario = saida.with_suffix(".csv.tmp")
-    bruto.to_csv(temporario, index=False, encoding="utf-8")
-    os.replace(temporario, saida)
-    log.info("Gravado %s (%d linhas)", saida, len(bruto))
-    return saida
+    return gravar_parquet(pd.concat(frames, ignore_index=True), saida)
 
 
 def main() -> None:

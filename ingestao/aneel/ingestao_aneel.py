@@ -5,7 +5,7 @@ Consulta a API pública CKAN do portal de dados abertos da ANEEL (endpoint
 fotovoltaica (UFV) e eólica (EOL): nome, CEG, UF, município, potência
 outorgada/fiscalizada, fase da usina, data de entrada em operação,
 coordenadas etc. O resultado é gravado, sem transformação, em
-`dados/bruto/dados_aneel_bruto.csv`.
+`dados/bruto/dados_aneel_bruto.parquet`.
 
 Uso:
     python -m ingestao.aneel.ingestao_aneel
@@ -17,13 +17,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import time
 from pathlib import Path
 
 import pandas as pd
 import requests
 
+from ingestao.armazenamento import gravar_parquet
 from ingestao.http import get_com_retry, nova_sessao
 
 API_URL = "https://dadosabertos.aneel.gov.br/api/3/action/datastore_search"
@@ -34,7 +34,7 @@ TAMANHO_PAGINA = 5000
 PAUSA_ENTRE_CHAMADAS_S = 0.5  # cortesia com a API pública
 
 RAIZ = Path(__file__).resolve().parents[2]
-SAIDA = RAIZ / "dados" / "bruto" / "dados_aneel_bruto.csv"
+SAIDA = RAIZ / "dados" / "bruto" / "dados_aneel_bruto.parquet"
 
 log = logging.getLogger("ingestao_aneel")
 
@@ -89,13 +89,7 @@ def baixar(tipos: list[str], saida: Path = SAIDA) -> Path:
     if len(bruto) != total:
         raise RuntimeError(f"Esperados {total} registros, recebidos {len(bruto)}.")
 
-    saida.parent.mkdir(parents=True, exist_ok=True)
-    # Build-then-swap: escreve em arquivo temporário e substitui atomicamente
-    temporario = saida.with_suffix(".csv.tmp")
-    bruto.to_csv(temporario, index=False, encoding="utf-8")
-    os.replace(temporario, saida)
-    log.info("Gravado %s (%d linhas)", saida, len(bruto))
-    return saida
+    return gravar_parquet(bruto, saida)
 
 
 def main() -> None:
