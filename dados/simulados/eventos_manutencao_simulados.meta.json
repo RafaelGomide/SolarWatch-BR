@@ -1,7 +1,7 @@
 {
-  "gerado_em": "2026-09-18T16:02:11",
+  "gerado_em": "2026-09-18T16:08:52",
   "descricao": "Dados SINTÉTICOS de 1º evento de manutenção corretiva/falha por usina.",
-  "fonte_usinas": "dados\\bruto\\dados_aneel_bruto.parquet",
+  "fonte_usinas": "dados/bruto/dados_aneel_bruto.parquet",
   "seed": 42,
   "potencia_minima_mw": 1.0,
   "data_minima_entrada": "1990-01-01",

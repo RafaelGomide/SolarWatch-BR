@@ -174,7 +174,7 @@ def _gravar_metadados(saida: Path, seed: int, potencia_minima_mw: float, df: pd.
     meta = {
         "gerado_em": datetime.now().isoformat(timespec="seconds"),
         "descricao": "Dados SINTÉTICOS de 1º evento de manutenção corretiva/falha por usina.",
-        "fonte_usinas": str(ENTRADA.relative_to(RAIZ)),
+        "fonte_usinas": ENTRADA.relative_to(RAIZ).as_posix(),
         "seed": seed,
         "potencia_minima_mw": potencia_minima_mw,
         "data_minima_entrada": DATA_MINIMA_ENTRADA,
