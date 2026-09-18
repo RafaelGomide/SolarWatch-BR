@@ -1,4 +1,13 @@
 # Ingestão
 requests>=2.32
-pandas>=2.2
+pandas>=2.2,<3  # lifelines (ds_toolkit) ainda não suporta pandas 3
 python-dotenv>=1.0
+
+# DS Toolkit (ds_toolkit/)
+numpy>=1.26
+scipy>=1.11
+scikit-learn>=1.4
+matplotlib>=3.8
+seaborn>=0.13
+joblib>=1.3
+lifelines>=0.28
