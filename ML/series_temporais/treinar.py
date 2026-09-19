@@ -44,11 +44,13 @@ def _grafico(serie: pd.DataFrame, previsoes: pd.DataFrame, nome: str) -> Path:
     inicio = ultima["data_hora"].min() - pd.Timedelta(days=3)
 
     fig, ax = plt.subplots(figsize=(12, 5))
-    contexto = serie.loc[serie.index >= inicio, ALVO]
-    ax.plot(contexto.index, contexto.to_numpy(), color="#333333", lw=2, label="observado")
     for modelo, grupo in ultima.groupby("modelo"):
-        ax.plot(grupo["data_hora"], grupo["previsto"], lw=1.8, ls="--", label=modelo)
-    ax.axvline(ultima["data_hora"].min(), color="#999999", lw=1)
+        ax.plot(grupo["data_hora"], grupo["previsto"], lw=1.8, ls="--", label=modelo, zorder=2)
+    # observado por último e acima: é a referência que precisa ficar visível
+    contexto = serie.loc[serie.index >= inicio, ALVO]
+    ax.plot(contexto.index, contexto.to_numpy(), color="#111111", lw=2.4,
+            label="observado", zorder=3)
+    ax.axvline(ultima["data_hora"].min(), color="#999999", lw=1, zorder=1)
     ax.set(title=f"Previsão de 24 h — {nome} (última janela do backtesting)",
            xlabel="", ylabel="MWh por hora")
     ax.legend(ncol=3, fontsize=9)
