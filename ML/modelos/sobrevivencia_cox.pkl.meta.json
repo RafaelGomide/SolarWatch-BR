@@ -1,0 +1,53 @@
+{
+  "salvo_em": "2026-09-19T20:44:54",
+  "classe": "PrevisorSobrevivencia",
+  "sklearn_versao": "1.9.1",
+  "pandas_versao": "2.3.3",
+  "tipo": "sobrevivencia_manutencao",
+  "modelo": "cox_ph_estratificado_por_fonte",
+  "treinado_em": "2026-09-19T20:44:51",
+  "origem_treino": "eventos_manutencao_simulados.parquet",
+  "dado_simulado": true,
+  "n_usinas_treino": 1854,
+  "n_eventos": 1018,
+  "cindex_cv": {
+    "k": 5,
+    "cindex_medio": 0.5666065905629554,
+    "cindex_desvio": 0.021988143269082563,
+    "scores": [
+      0.5936418861859489,
+      0.5755239334459179,
+      0.5814634014779654,
+      0.534293859526538,
+      0.5481098721784063
+    ]
+  },
+  "beta_verdadeiro": {
+    "log_potencia_mw_c": 0.2,
+    "subsistema_NE": 0.25,
+    "subsistema_S": 0.1,
+    "subsistema_N": 0.15,
+    "ano_entrada_c": -0.04
+  },
+  "weibull_verdadeiro": {
+    "eolica": {
+      "k": 1.6,
+      "lambda_anos": 5.5
+    },
+    "solar": {
+      "k": 1.3,
+      "lambda_anos": 7.0
+    }
+  },
+  "horizontes_meses": [
+    6,
+    12,
+    24,
+    36
+  ],
+  "limite_suporte_cox_anos": {
+    "eolica": 11.48667181027178,
+    "solar": 12.397363247632336
+  },
+  "extrapolacao": "regressao Weibull por fonte além do último evento observado"
+}
