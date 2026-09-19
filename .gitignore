@@ -6,6 +6,11 @@
 # Dados brutos (reconstruíveis a partir das fontes públicas)
 dados/bruto/
 
+# Banco estático (~46 MB, reconstruível com: python -m DB.criar_banco)
+DB/*.duckdb
+DB/*.duckdb.tmp
+DB/*.duckdb.wal
+
 # Python
 __pycache__/
 *.py[cod]
