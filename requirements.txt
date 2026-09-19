@@ -16,3 +16,6 @@ lifelines>=0.28
 
 # Banco estático (DB/)
 duckdb>=1.1
+
+# Séries temporais (ML/series_temporais/)
+statsmodels>=0.14  # SARIMA
