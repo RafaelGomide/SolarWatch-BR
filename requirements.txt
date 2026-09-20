@@ -19,3 +19,12 @@ duckdb>=1.1
 
 # Séries temporais (ML/series_temporais/)
 statsmodels>=0.14  # SARIMA
+
+# Backend (backend/)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic-settings>=2.4
+
+# Testes
+pytest>=8
+httpx>=0.27
