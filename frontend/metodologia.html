@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="pt-BR" data-tema="escuro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Metodologia · SolarWatch BR</title>
+  <meta name="description" content="De onde vêm os dados do SolarWatch BR, como são tratados e o que não representam.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="stylesheet" href="css/estilo.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23a855f7'/><circle cx='16' cy='16' r='7' fill='%230ea5e9'/></svg>">
+</head>
+<body>
+  <header class="cabecalho">
+    <div class="envoltorio cabecalho__conteudo">
+      <a class="marca" href="index.html">
+        <span class="marca__logo" aria-hidden="true"></span>
+        SolarWatch <span class="marca__sufixo">BR</span>
+      </a>
+      <nav class="navegacao" aria-label="Principal">
+        <a href="index.html">Painel</a>
+        <a href="metodologia.html" aria-current="page">Metodologia</a>
+        <a href="/docs" target="_blank" rel="noopener">API ↗</a>
+        <button class="botao botao--fantasma" data-alternar-tema type="button">☾ Escuro</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="principal">
+    <div class="envoltorio" style="max-width:860px">
+
+      <h1>Metodologia</h1>
+      <p>O que este painel mostra, de onde vem cada número e — principalmente — o que ele <strong>não</strong> é.</p>
+
+      <div class="aviso" role="note" style="margin-bottom:2rem">
+        <span aria-hidden="true">⚠</span>
+        <span><strong>Os eventos de manutenção são simulados.</strong> Não existe base pública granular de falhas de
+          usinas no Brasil. Os tempos até manutenção foram gerados por um modelo estatístico sobre o cadastro real
+          da ANEEL. As probabilidades de sobrevivência servem para demonstrar o método, e não dizem nada sobre a
+          confiabilidade real de nenhuma usina.</span>
+      </div>
+
+      <section class="secao">
+        <h2>Fontes de dados</h2>
+        <div class="grade grade--dois">
+          <article class="cartao">
+            <h3 style="color:var(--cor-eolica)">ONS — geração</h3>
+            <p>Geração verificada por usina e por hora, do dataset aberto “Geração por Usina em Base Horária”.
+              Cobre solar, eólica, hidráulica, térmica e nuclear; o painel usa solar e eólica.</p>
+            <p class="mono" style="font-size:0.8rem">grão: usina × hora · horário de Brasília → UTC</p>
+          </article>
+          <article class="cartao">
+            <h3 style="color:var(--cor-solar)">NASA POWER — clima</h3>
+            <p>Irradiância, vento a 10 m e 50 m e temperatura, coletados em 10 pontos que representam polos de
+              geração. A série horária de irradiância sai com cerca de 3 meses de atraso, então o painel usa a
+              série diária.</p>
+            <p class="mono" style="font-size:0.8rem">grão: coordenada × dia</p>
+          </article>
+          <article class="cartao">
+            <h3 style="color:var(--cor-ok)">ANEEL — cadastro</h3>
+            <p>SIGA: potência outorgada, município, coordenadas, fase e data de entrada em operação de cada
+              empreendimento solar e eólico.</p>
+            <p class="mono" style="font-size:0.8rem">grão: empreendimento · retrato diário</p>
+          </article>
+          <article class="cartao">
+            <h3 style="color:var(--cor-risco)">Manutenção — simulada</h3>
+            <p>Tempo até o primeiro evento gerado por uma Weibull de riscos proporcionais sobre as usinas reais,
+              com censura à direita para quem ainda não teve evento.</p>
+            <p class="mono" style="font-size:0.8rem">grão: usina · <strong>dado sintético</strong></p>
+          </article>
+        </div>
+      </section>
+
+      <section class="secao" id="vinculo">
+        <h2>Por que algumas usinas aparecem “sem cadastro”</h2>
+        <p>O ONS mede a geração solar e eólica quase sempre por <strong>conjunto de usinas</strong>, sem informar
+          quais usinas da ANEEL compõem cada conjunto. O cruzamento é feito por código CEG, quando existe, e por
+          nome nos demais casos.</p>
+        <p>O vínculo por nome é verificado contra a geração medida: se o pico observado não for compatível com a
+          potência vinculada, o vínculo é marcado como inconsistente e a <strong>potência não é publicada</strong> —
+          é melhor mostrar “sem cadastro” do que um número errado.</p>
+        <dl class="lista-definicoes">
+          <div><dt>Vínculo exato (CEG)</dt><dd style="color:var(--cor-ok)">18 unidades</dd></div>
+          <div><dt>Vínculo consistente</dt><dd style="color:var(--cor-ok)">78 unidades</dd></div>
+          <div><dt>Inconsistente</dt><dd style="color:var(--cor-aviso)">66 unidades</dd></div>
+          <div><dt>Sem vínculo</dt><dd style="color:var(--texto-fraco)">146 unidades</dd></div>
+        </dl>
+      </section>
+
+      <section class="secao">
+        <h2>Tratamento dos dados</h2>
+        <ul style="color:var(--texto-suave);line-height:1.7">
+          <li><strong>Fuso:</strong> o ONS publica em horário de Brasília; tudo é normalizado para UTC e exibido no
+            horário local do seu navegador.</li>
+          <li><strong>Buracos na série:</strong> até 3 horas seguidas são interpolados; acima disso o dado fica
+            <em>faltante</em> e aparece como lacuna, em vez de ser inventado.</li>
+          <li><strong>Valores negativos</strong> de geração (consumo auxiliar da usina) são zerados e marcados.</li>
+          <li><strong>Datas fictícias</strong> do cadastro da ANEEL (como 1900-01-03) viram nulo.</li>
+          <li><strong>Clima por usina é aproximado:</strong> vem do ponto de coleta mais próximo, e a distância é
+            informada na página de cada usina.</li>
+        </ul>
+      </section>
+
+      <section class="secao">
+        <h2>Modelos</h2>
+        <div class="grade grade--dois">
+          <article class="cartao">
+            <h3>Previsão de geração</h3>
+            <p>Gradient boosting com calendário, defasagens e clima, validado por <em>backtesting</em> de janela
+              deslizante — nunca treinando com dado posterior ao previsto.</p>
+            <p>Ganho sobre o baseline sazonal: <strong style="color:var(--cor-ok)">+31%</strong> na eólica e
+              <strong style="color:var(--cor-ok)">+47%</strong> na solar (redução de RMSE).</p>
+            <p style="font-size:0.85rem">O modelo é treinado no agregado por fonte; o valor por usina é um rateio
+              proporcional, sempre declarado na resposta da API.</p>
+          </article>
+          <article class="cartao">
+            <h3>Sobrevivência de ativos</h3>
+            <p>Cox de riscos proporcionais estratificado por fonte, com potência, região e coorte de entrada como
+              covariáveis. Probabilidade condicional à idade da usina.</p>
+            <p>Calibração verificada contra Kaplan-Meier: erro médio de <strong>0,012</strong>.</p>
+            <p style="font-size:0.85rem">Treinado sobre <strong>dados simulados</strong>.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="secao">
+        <h2>Atualização</h2>
+        <p>O banco é estático: reconstruído quando o pipeline roda, não em tempo real. O período coberto aparece no
+          painel. A API expõe o mesmo dado em <a href="/docs" target="_blank" rel="noopener">/docs</a>, com contrato
+          OpenAPI e erros no padrão RFC 9457.</p>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="rodape">
+    <div class="envoltorio">
+      Projeto de portfólio, sem vínculo com ONS, NASA ou ANEEL. Dados públicos, uso não comercial.
+    </div>
+  </footer>
+
+  <script type="module" src="js/tema.js"></script>
+  <script type="module">
+    import { iniciarTema } from "./js/tema.js";
+    iniciarTema();
+  </script>
+</body>
+</html>

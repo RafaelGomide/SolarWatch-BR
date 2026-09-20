@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="pt-BR" data-tema="escuro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SolarWatch BR — geração solar e eólica no Brasil</title>
+  <meta name="description" content="Painel de geração solar e eólica do SIN, com dados do ONS, clima da NASA POWER e cadastro da ANEEL.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="stylesheet" href="css/estilo.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23a855f7'/><circle cx='16' cy='16' r='7' fill='%230ea5e9'/></svg>">
+</head>
+<body>
+  <header class="cabecalho">
+    <div class="envoltorio cabecalho__conteudo">
+      <a class="marca" href="index.html">
+        <span class="marca__logo" aria-hidden="true"></span>
+        SolarWatch <span class="marca__sufixo">BR</span>
+      </a>
+      <nav class="navegacao" aria-label="Principal">
+        <a href="index.html" aria-current="page">Painel</a>
+        <a href="metodologia.html">Metodologia</a>
+        <a href="/docs" target="_blank" rel="noopener">API ↗</a>
+        <button class="botao botao--fantasma" data-alternar-tema type="button">☾ Escuro</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="principal">
+    <div class="envoltorio">
+
+      <section class="secao">
+        <div class="secao__cabecalho">
+          <h1>Geração solar e eólica no Brasil</h1>
+        </div>
+        <p style="max-width:70ch">
+          Dados de geração verificada do <strong>ONS</strong>, clima da <strong>NASA POWER</strong> e cadastro da
+          <strong>ANEEL</strong>, processados por um pipeline próprio e servidos por uma API pública de leitura.
+          Os números refletem a última execução do ETL — este painel não é tempo real.
+        </p>
+        <div class="grade grade--kpis" id="kpis">
+          <article class="cartao kpi"><div class="carregando" style="height:64px"></div></article>
+          <article class="cartao kpi"><div class="carregando" style="height:64px"></div></article>
+          <article class="cartao kpi"><div class="carregando" style="height:64px"></div></article>
+          <article class="cartao kpi"><div class="carregando" style="height:64px"></div></article>
+        </div>
+      </section>
+
+      <section class="secao">
+        <div class="secao__cabecalho">
+          <h2>Geração diária do SIN</h2>
+          <p>Soma de todas as unidades, por fonte, em MWh por dia.</p>
+        </div>
+        <div class="cartao">
+          <div id="grafico-nacional"><div class="carregando" style="height:240px"></div></div>
+        </div>
+      </section>
+
+      <section class="secao">
+        <div class="secao__cabecalho">
+          <h2>Previsão das próximas 24 horas</h2>
+          <p id="previsao-origem">Carregando modelo…</p>
+        </div>
+        <div class="cartao cartao--destaque">
+          <div id="grafico-previsao"><div class="carregando" style="height:240px"></div></div>
+          <div class="aviso aviso--neutro" style="margin-top:1rem">
+            <span aria-hidden="true">ℹ</span>
+            <span>Previsão do modelo de <em>gradient boosting</em> validado por backtesting de janela deslizante.
+              O clima do horizonte é aproximado pelo último dia observado — em produção entraria uma previsão meteorológica.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="secao">
+        <div class="secao__cabecalho">
+          <h2>Usinas monitoradas</h2>
+          <p><span id="contagem-usinas">—</span> unidades</p>
+        </div>
+
+        <div class="cartao" style="margin-bottom:1rem">
+          <div class="filtros">
+            <div class="campo">
+              <label for="filtro-fonte">Fonte</label>
+              <select id="filtro-fonte">
+                <option value="">Todas</option>
+                <option value="solar">Solar</option>
+                <option value="eolica">Eólica</option>
+              </select>
+            </div>
+            <div class="campo">
+              <label for="filtro-regiao">Subsistema</label>
+              <select id="filtro-regiao">
+                <option value="">Todos</option>
+                <option value="N">Norte</option>
+                <option value="NE">Nordeste</option>
+                <option value="SE">Sudeste / Centro-Oeste</option>
+                <option value="S">Sul</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabela-envoltorio">
+          <table>
+            <caption class="apenas-leitor">Usinas e conjuntos com geração medida pelo ONS</caption>
+            <thead>
+              <tr>
+                <th scope="col">Unidade</th>
+                <th scope="col">Fonte</th>
+                <th scope="col">Local</th>
+                <th scope="col" class="numero">Potência</th>
+                <th scope="col">Operação desde</th>
+              </tr>
+            </thead>
+            <tbody id="corpo-usinas">
+              <tr><td colspan="5"><div class="carregando"></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="display:flex;justify-content:center;margin-top:1rem">
+          <button class="botao escondido" id="carregar-mais" type="button">Carregar mais</button>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="rodape">
+    <div class="envoltorio">
+      Fontes: <a href="https://dados.ons.org.br" target="_blank" rel="noopener">ONS</a> ·
+      <a href="https://power.larc.nasa.gov" target="_blank" rel="noopener">NASA POWER</a> ·
+      <a href="https://dadosabertos.aneel.gov.br" target="_blank" rel="noopener">ANEEL</a>.
+      Eventos de manutenção são <strong>simulados</strong> — veja a <a href="metodologia.html">metodologia</a>.
+    </div>
+  </footer>
+
+  <script type="module" src="js/painel.js"></script>
+</body>
+</html>

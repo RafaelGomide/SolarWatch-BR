@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="pt-BR" data-tema="escuro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Usina · SolarWatch BR</title>
+  <meta name="color-scheme" content="dark light">
+  <link rel="stylesheet" href="css/estilo.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23a855f7'/><circle cx='16' cy='16' r='7' fill='%230ea5e9'/></svg>">
+</head>
+<body>
+  <header class="cabecalho">
+    <div class="envoltorio cabecalho__conteudo">
+      <a class="marca" href="index.html">
+        <span class="marca__logo" aria-hidden="true"></span>
+        SolarWatch <span class="marca__sufixo">BR</span>
+      </a>
+      <nav class="navegacao" aria-label="Principal">
+        <a href="index.html">Painel</a>
+        <a href="metodologia.html">Metodologia</a>
+        <a href="/docs" target="_blank" rel="noopener">API ↗</a>
+        <button class="botao botao--fantasma" data-alternar-tema type="button">☾ Escuro</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="principal">
+    <div class="envoltorio">
+
+      <section class="secao" id="cabecalho-usina">
+        <p style="margin-bottom:0.4rem"><a href="index.html">← Todas as usinas</a></p>
+        <h1 id="nome-usina"><span class="carregando" style="display:inline-block;width:18ch"></span></h1>
+        <div id="etiquetas" style="display:flex;gap:0.45rem;flex-wrap:wrap;margin-bottom:1rem"></div>
+
+        <div class="cartao">
+          <dl class="lista-definicoes" id="cadastro">
+            <div><dt>Carregando</dt><dd><span class="carregando" style="display:inline-block;width:8ch"></span></dd></div>
+          </dl>
+          <div class="aviso escondido" id="aviso-cadastro" style="margin-top:1rem" role="note">
+            <span aria-hidden="true">⚠</span>
+            <span><strong>Cadastro parcial.</strong> Não foi possível vincular esta unidade do ONS às usinas da ANEEL
+              com confiança, então potência, coordenadas e data de operação podem estar ausentes.
+              Veja o critério na <a href="metodologia.html#vinculo">metodologia</a>.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="secao">
+        <div class="secao__cabecalho">
+          <h2>Geração medida</h2>
+          <p id="resumo-geracao">—</p>
+          <div class="campo" style="margin-left:auto">
+            <label for="periodo-geracao">Período</label>
+            <select id="periodo-geracao">
+              <option value="7">Últimos 7 dias</option>
+              <option value="15" selected>Últimos 15 dias</option>
+              <option value="30">Últimos 30 dias</option>
+              <option value="60">Últimos 60 dias</option>
+            </select>
+          </div>
+        </div>
+        <div class="cartao">
+          <div id="grafico-geracao"><div class="carregando" style="height:220px"></div></div>
+        </div>
+      </section>
+
+      <div class="grade grade--dois">
+        <section class="secao" style="margin-bottom:0">
+          <div class="secao__cabecalho"><h2>Clima</h2></div>
+          <div class="cartao">
+            <div id="grafico-clima"><div class="carregando" style="height:200px"></div></div>
+            <p id="origem-clima" style="font-size:0.82rem;margin:0.8rem 0 0"></p>
+          </div>
+        </section>
+
+        <section class="secao" style="margin-bottom:0">
+          <div class="secao__cabecalho"><h2>Previsão de 24 h</h2></div>
+          <div class="cartao">
+            <div id="grafico-previsao"><div class="carregando" style="height:200px"></div></div>
+            <p id="nota-previsao" style="font-size:0.82rem;margin:0.8rem 0 0"></p>
+          </div>
+        </section>
+      </div>
+
+      <section class="secao" style="margin-top:2.25rem">
+        <div class="secao__cabecalho">
+          <h2>Sobrevivência sem manutenção</h2>
+          <p>Probabilidade estimada por modelo de Cox — <strong>dados simulados</strong>.</p>
+        </div>
+        <div class="cartao" id="sobrevivencia">
+          <div class="carregando" style="height:180px"></div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="rodape">
+    <div class="envoltorio">
+      Geração: ONS · Clima: NASA POWER · Cadastro: ANEEL · Manutenção: <strong>simulada</strong>.
+      <a href="metodologia.html">Como estes números são produzidos</a>.
+    </div>
+  </footer>
+
+  <script type="module" src="js/usina.js"></script>
+</body>
+</html>
