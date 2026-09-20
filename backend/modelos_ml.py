@@ -16,6 +16,7 @@ rodar `uvicorn backend.main:app` a partir da raiz.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ class RegistroModelos:
     def __init__(self) -> None:
         self.sobrevivencia: Any | None = None
         self.previsao: dict[str, Any] = {}
+        self.metadados: dict[str, dict] = {}   # do .meta.json gravado junto do pickle
         self.probabilidades: pd.DataFrame | None = None
         self.falhas: dict[str, str] = {}
 
@@ -45,9 +47,19 @@ class RegistroModelos:
             self._carregar_previsao(fonte, pasta / padrao_previsao.format(fonte=fonte))
         self._carregar_probabilidades(pasta / nome_probabilidades)
 
+    @staticmethod
+    def _meta(caminho: Path) -> dict:
+        """Metadados gravados por ds_toolkit.salvar_modelo ao lado do pickle."""
+        arquivo = caminho.with_name(caminho.name + ".meta.json")
+        try:
+            return json.loads(arquivo.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
     def _carregar_sobrevivencia(self, caminho: Path) -> None:
         try:
             self.sobrevivencia = joblib.load(caminho)
+            self.metadados["sobrevivencia"] = self._meta(caminho)
             log.info("[modelos] sobrevivência carregada (%s, horizontes %s)",
                      caminho.name, self.sobrevivencia.horizontes_meses)
         except Exception as erro:
@@ -57,6 +69,7 @@ class RegistroModelos:
     def _carregar_previsao(self, fonte: str, caminho: Path) -> None:
         try:
             self.previsao[fonte] = joblib.load(caminho)
+            self.metadados[f"previsao_{fonte}"] = self._meta(caminho)
             log.info("[modelos] previsão '%s' carregada (%s, horizonte %d h)",
                      fonte, self.previsao[fonte].nome, self.previsao[fonte].horizonte)
         except Exception as erro:

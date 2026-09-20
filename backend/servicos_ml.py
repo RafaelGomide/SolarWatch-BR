@@ -66,7 +66,8 @@ def prever_fonte(fonte: str) -> dict:
         "origem": historico.index.max(),
         "metodo": "modelo_por_fonte",
         "premissa_clima": PREMISSA_CLIMA,
-        "metricas_backtesting": getattr(modelo, "metricas_", None),
+        "metricas_backtesting": registro.metadados.get(f"previsao_{fonte}", {}).get(
+            "metricas_backtesting"),
         "data": [{"timestamp": t, "energia_mwh_prevista": float(v)} for t, v in previsto.items()],
     }
 
