@@ -211,18 +211,21 @@ Criado quando a segunda fonte (NASA) entrou. A lógica de retry, que antes estav
 for tentativa in range(1, MAX_TENTATIVAS + 1):         # MAX_TENTATIVAS = 5
     try:
         resp = sessao.get(url, timeout=TIMEOUT_S, **kwargs)   # TIMEOUT_S = 120
-        if resp.status_code == 404:
-            return resp
-        if resp.status_code == 429 or resp.status_code >= 500:
-            raise requests.HTTPError(...)
-        resp.raise_for_status()
+    except (ConnectionError, Timeout) as erro:                # falha de rede
+        _esperar_ou_levantar(tentativa, url, erro)
+        continue
+
+    if resp.status_code == 404:
         return resp
-    except (ConnectionError, Timeout, HTTPError):
-        if tentativa == MAX_TENTATIVAS:
-            raise
-        espera = min(2**tentativa, 60) + random.uniform(0, 1)
-        time.sleep(espera)
+    if resp.status_code == 429 or resp.status_code >= 500:     # transitório
+        _esperar_ou_levantar(tentativa, url, HTTPError(f"HTTP {resp.status_code}", response=resp))
+        continue
+
+    resp.raise_for_status()   # 4xx não-transitório: levanta já na 1ª tentativa
+    return resp
 ```
+
+A decisão de repetir ou não está **antes** do `raise_for_status()`, e não num `except` que capturaria os dois casos. `_esperar_ou_levantar(tentativa, url, erro)` concentra o backoff: dorme e devolve o controle, ou propaga `erro` quando a última tentativa acabou.
 
 Como cada tipo de resposta é tratado:
 
@@ -231,14 +234,16 @@ Como cada tipo de resposta é tratado:
 | `2xx` | retorna | sucesso |
 | `404` | retorna **sem** retry | "não existe" não é falha transitória. O chamador decide: o ONS usa isso para pular meses ainda não publicados |
 | `429` (rate limit) e `5xx` | retry | falhas transitórias típicas de servidor sobrecarregado |
-| outros `4xx` (400, 403…) | `raise_for_status()` levanta `HTTPError`, que é capturado e **também gera retry** | ver observação abaixo |
+| outros `4xx` (400, 401, 403, 409, 422…) | `raise_for_status()` levanta `HTTPError` **na primeira tentativa** | é erro da própria requisição (parâmetro, rota, credencial); repetir devolve exatamente a mesma resposta |
 | erro de conexão / timeout | retry | falha de rede transitória |
 
 Espera entre tentativas: **exponential backoff com jitter**. As esperas são 2, 4, 8 e 16 s, mais 0–1 s aleatório, com teto de 60 s. Na pior falha persistente, o total fica em torno de 30 s antes de desistir. O *jitter* evita que várias execuções simultâneas retentem em sincronia. Nesta escala isso é mais boa prática do que necessidade, mas está pedido explicitamente em §11 do system design.
 
 **Por que retry é seguro aqui:** todas as chamadas são `GET` de leitura, idempotentes por definição (§11 do system design).
 
-**Observação:** um erro `4xx` genuíno (por exemplo, parâmetro inválido → `400`) também passa por 5 tentativas antes de falhar, porque `raise_for_status()` levanta o mesmo `HTTPError` capturado pelo `except`. Isso só custa cerca de 30 s num erro que é de programação, e não de rede, e o erro final chega ao usuário do mesmo jeito. Veja [§11](#11-limitações-conhecidas-e-próximos-passos).
+**Histórico — `4xx` repetido sem motivo:** a primeira versão tinha um único `try` cobrindo a resposta inteira, com `ConnectionError`, `Timeout` e `HTTPError` no mesmo `except`. O `HTTPError` levantado pelo `raise_for_status()` num `400` caía no mesmo caminho de retry dos `5xx`, então um erro de programação — parâmetro errado, rota errada — só era reportado depois de 5 tentativas e ~30 s de espera. Pior, cada tentativa martelava um serviço público com uma requisição que já se sabia inválida.
+
+Agora o `raise_for_status()` está fora do `try`, o que separa **falha transitória** (vale repetir) de **requisição inválida** (não vale). Medido contra a API do ONS, um `409` real (chamada de `package_show` sem o parâmetro `id`) passou de ~30 s para **0,2 s** até o erro chegar. O comportamento dos casos transitórios não mudou: `429`, `5xx`, `ConnectionError` e `Timeout` continuam com as 5 tentativas.
 
 ### 5.2 `nova_sessao()`
 
@@ -682,7 +687,7 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 |---|---|---|---|
 | 1 | ~~Meses do ONS concatenados em memória~~ **Resolvido:** um Parquet por mês em `dados/bruto/dados_ons_bruto/`, lido por glob ([§6.2.1](#621-um-parquet-por-mês)) | — | — |
 | 2 | ~~Bruto em CSV~~ **Resolvido:** migrado para Parquet ([§4.5](#45-formato-de-saída-parquet)) | — | — |
-| 3 | `get_com_retry` repete erros `4xx` não-429 | Erro de parâmetro leva cerca de 30 s para ser reportado | Levantar imediatamente em `4xx` (exceto 429) |
+| 3 | ~~`get_com_retry` repete erros `4xx` não-429~~ **Resolvido:** `4xx` (exceto 429) levanta na primeira tentativa ([§5.1](#51-get_com_retrysessao-url-kwargs)) | — | — |
 | 4 | Coordenadas de `locais.csv` definidas manualmente e aproximadas | Clima representativo do município, não da usina | Gerar `locais.csv` a partir das coordenadas da ANEEL (maiores usinas por UF) |
 | 5 | NASA: vento/temperatura atrasam ~2 dias; irradiância horária ~3 meses, diária ~1 semana | Janela recente sem clima | ETL trata como nulo com flag `faltante`; a `fato_clima` usa a série diária. Para análises horárias de irradiância, usar períodos com mais de 3 meses |
 | 6 | ANEEL é um retrato único, sobrescrito a cada execução | Perde-se o histórico de mudanças de fase (construção → operação) | Se a análise de sobrevivência precisar, arquivar retratos datados (`dados_aneel_bruto_AAAA-MM-DD.parquet`) |
