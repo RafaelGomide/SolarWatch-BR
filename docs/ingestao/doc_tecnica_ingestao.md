@@ -18,7 +18,8 @@
 8. [Fonte 3 — ANEEL SIGA: cadastro de usinas](#8-fonte-3--aneel-siga-cadastro-de-usinas)
 9. [Como as três fontes se cruzam](#9-como-as-três-fontes-se-cruzam)
 10. [Compliance, segurança e privacidade](#10-compliance-segurança-e-privacidade)
-11. [Limitações conhecidas e próximos passos](#11-limitações-conhecidas-e-próximos-passos)
+11. [Testes automatizados](#11-testes-automatizados)
+12. [Limitações conhecidas e próximos passos](#12-limitações-conhecidas-e-próximos-passos)
 
 ---
 
@@ -178,7 +179,7 @@ def gravar_parquet(df, saida):
 
 O Parquet é escrito primeiro em `*.parquet.tmp` e só depois substitui o arquivo definitivo com `os.replace`, que é uma operação atômica no mesmo sistema de arquivos, inclusive no Windows. Se o processo cair no meio da escrita (falta de espaço, Ctrl+C, erro de rede antes da escrita), o arquivo anterior continua íntegro. Nunca existe um `dados_*_bruto.parquet` pela metade. Isso espelha o *build-then-swap* que o ETL usa para o `.duckdb` (§9 e §13.3 do system design).
 
-Consequência prática: o DataFrame inteiro é montado em memória antes da escrita. Com o ONS lido em Parquet já tipado, isso cai para algumas centenas de MB com 3 meses. Na versão CSV, com tudo como texto, eram cerca de 1–2 GB. Veja [§11](#11-limitações-conhecidas-e-próximos-passos).
+Consequência prática: cada chamada monta um DataFrame inteiro em memória antes de escrever. Por isso o ONS grava **um arquivo por mês** ([§6.2.1](#621-um-parquet-por-mês)): o pico passa a ser o de um mês (~530 mil linhas), independente do tamanho do período. Na versão CSV, com tudo como texto, eram 1–2 GB para os mesmos 3 meses.
 
 ### 4.4 Resiliência de rede
 
@@ -738,7 +739,50 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 
 ---
 
-## 11. Limitações conhecidas e próximos passos
+## 11. Testes automatizados
+
+```bash
+pytest ingestao/tests -q        # 82 testes, ~5 s
+pytest -q                       # com os 24 do backend: 106
+```
+
+**Nenhum teste toca a rede.** Todas as respostas HTTP são simuladas com [`responses`](https://github.com/getsentry/responses), que intercepta o `requests` na camada do adaptador: a sessão, os cabeçalhos, os parâmetros e o código de status são os reais, só o socket não existe. Isso permite testar coisas que a rede não oferece sob demanda — um `429`, um mês que ainda não foi publicado, o recurso da ANEEL mudando no meio da paginação.
+
+O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de retry dormiria os mesmos 2+4+8+16 s da execução real; a fixture `esperas` captura os valores pedidos, o que permite **verificar o backoff sem esperá-lo**.
+
+| Arquivo | Cobre | Testes |
+|---|---|---|
+| `test_http.py` | política de retry: `4xx` levanta na primeira tentativa, `429`/`5xx`/rede repetem até 5, `404` volta sem exceção, backoff exponencial com jitter, User-Agent | 14 |
+| `test_ons.py` | `_meses`, `PADRAO_MENSAL`, `_urls_disponiveis`, `baixar` | 24 |
+| `test_nasa_power.py` | `_janelas_anuais`, `_baixar_local` | 12 |
+| `test_aneel.py` | paginação e retratos datados | 14 |
+| `test_gerar_locais.py` | seleção dos pontos de clima a partir do cadastro | 18 |
+
+### 11.1 O que cada grupo protege
+
+**`_meses`** ([§6.4](#64-geração-dos-meses-_meses)) — a virada de ano é o caso que a aritmética manual costuma errar: `(2025-11 → 2026-02)` tem que dar quatro meses, e `fim` antes de `inicio` tem que dar lista vazia, não um laço infinito.
+
+**`PADRAO_MENSAL`** ([§6.3](#63-descoberta-de-arquivos-_urls_disponiveis)) — é o teste de regressão do primeiro bug real do projeto: a versão inicial usava `rsplit("_", 2)` e quebrava com `ValueError` nos arquivos **anuais** do ONS, tentando converter `"USINA-2"` em ano. Há um caso explícito para `GERACAO_USINA-2_2015.parquet`, mais CSV, XLSX e `.parquet.tmp`, que também não podem casar.
+
+**`_janelas_anuais`** ([§7.2](#72-a-chamada)) — além dos casos diretos, uma propriedade: para qualquer período, as janelas emendam exatamente (o fim de uma é véspera do início da seguinte), nenhuma cruza o ano e as pontas batem com o período pedido. É o tipo de invariante que um exemplo isolado não garante.
+
+**Paginação da ANEEL** ([§8.3](#83-lógica-de-paginação-e-verificações-de-consistência)) — com `TAMANHO_PAGINA` reduzido para 2 via `monkeypatch`, dá para paginar de verdade sem simular 5.000 linhas. Os testes verificam o avanço do `offset`, o `sort=_id asc` (sem ele a paginação por offset repete ou pula linhas), o filtro `SigTipoGeracao` e as três formas de abortar: total mudando no meio da coleta, contagem final menor que a prometida e `success: false`. Em todos os casos de aborto, verifica-se também que **nada foi gravado** — um retrato pela metade não pode virar camada bruta.
+
+**`baixar` do ONS** — que cada mês vira um arquivo, que um mês `404` é pulado sem derrubar os outros, que a URL do CKAN tem precedência sobre o padrão do S3, que `arquivo_origem` guarda o nome **na fonte** e que reingerir um mês não apaga os demais (a garantia da ingestão incremental).
+
+**Retratos da ANEEL** ([§8.5](#85-retratos-datados--historico_aneel)) — que a data vem do dado e não do relógio, que arquivar duas vezes não regrava (comparando o `mtime` em nanossegundos), que `retratos()` ignora arquivos estranhos na pasta e que `mudancas_de_fase` detecta tanto a transição `Construção → Operação` quanto a usina que entrou no cadastro.
+
+**`gerar_locais`** ([§7.3](#73-escolha-dos-locais--locaiscsv)) — o formato numérico brasileiro (`"11.832,10"` → `11.8321` MW), os descartes (potência baixa, fase, coordenada fora do Brasil, outra fonte), o caso real das "Fótons de São George" (UF de MS com coordenada no Piauí) e o **determinismo** com potências empatadas: o teste gera o CSV cinco vezes e exige o mesmo ponto.
+
+### 11.2 O que não é testado
+
+- **O contrato das APIs públicas.** Se a ANEEL trocar o nome de uma coluna ou a NASA mudar o formato da resposta, a suíte continua verde — ela testa o nosso código contra o formato **conhecido**. Detectar isso exigiria um teste de integração com rede, rodado em separado e tolerante a indisponibilidade.
+- **A ingestão ponta a ponta com dados reais**, pelo mesmo motivo.
+- **Cobertura medida.** Não há `pytest-cov` configurado; a escolha dos casos é por risco, não por percentual.
+
+---
+
+## 12. Limitações conhecidas e próximos passos
 
 | # | Limitação | Impacto | Sugestão |
 |---|---|---|---|
@@ -748,7 +792,7 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 | 4 | ~~Coordenadas de `locais.csv` manuais e aproximadas~~ **Resolvido:** geradas da ANEEL por `gerar_locais.py`; a capacidade com clima a ≤ 300 km subiu de 77,3% para 96,5% ([§7.3](#73-escolha-dos-locais--locaiscsv)) | Resta: um ponto por (fonte, UF) é regional, não por usina | Subir `--por-grupo`, ou consultar a NASA por usina nas maiores (custo linear em chamadas) |
 | 5 | ~~NASA: vento/temperatura atrasam ~2 dias; irradiância horária ~3 meses, diária ~1 semana~~ | Janela recente sem parte das variáveis **Tratado:** o valor `-999` vira nulo com flag `faltante`, a coluna `medidas_faltantes` diz **quais** variáveis faltaram (as latências são diferentes por variável) e a `fato_clima` usa a série diária. A API expõe as duas colunas e o frontend escreve a ressalva na tela. Para análises horárias de irradiância, usar períodos com mais de 3 meses |
 | 6 | ~~ANEEL é um retrato único, sobrescrito~~ **Resolvido:** cada execução arquiva `historico_aneel/dados_aneel_bruto_AAAA-MM-DD.parquet`, com data lida de `DatGeracaoConjuntoDados`, e `--mudancas-de-fase` compara dois retratos ([§8.5](#85-retratos-datados--historico_aneel)) | Resta: só há um retrato arquivado, então ainda não há série histórica para a análise de sobrevivência usar | Rodar a ingestão periodicamente (o valor aparece com o tempo) |
-| 7 | Sem testes automatizados | Regressões silenciosas (como o bug da regex do ONS) | Testes unitários de `_meses`, `_janelas_anuais`, `PADRAO_MENSAL` e paginação da ANEEL com respostas simuladas (`pytest` + `responses`), conforme §13 do system design |
+| 7 | ~~Sem testes automatizados~~ **Resolvido:** 82 testes em `ingestao/tests` com `pytest` + `responses`, sem rede ([§11](#11-testes-automatizados)) | Resta: mudança de contrato nas APIs públicas não é detectada | Um teste de integração com rede, rodado à parte e tolerante a indisponibilidade |
 | 8 | Três comandos separados | Fácil esquecer uma fonte | Um orquestrador `python -m ingestao` que rode as três fontes em sequência |
 
 ---

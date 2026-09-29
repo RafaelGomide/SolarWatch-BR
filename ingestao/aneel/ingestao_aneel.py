@@ -137,7 +137,7 @@ def mudancas_de_fase(anterior: Path, atual: Path) -> pd.DataFrame:
             .reset_index(drop=True))
 
 
-def baixar(tipos: list[str], saida: Path = SAIDA) -> Path:
+def baixar(tipos: list[str], saida: Path = SAIDA, historico: Path = HISTORICO) -> Path:
     sessao = nova_sessao()
 
     registros: list[dict] = []
@@ -167,7 +167,7 @@ def baixar(tipos: list[str], saida: Path = SAIDA) -> Path:
     if len(bruto) != total:
         raise RuntimeError(f"Esperados {total} registros, recebidos {len(bruto)}.")
 
-    arquivar(bruto)          # retrato datado, preservado
+    arquivar(bruto, historico)   # retrato datado, preservado
     return gravar_parquet(bruto, saida)   # retrato corrente, lido pelo ETL
 
 

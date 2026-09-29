@@ -197,9 +197,9 @@ def cobertura(cand: pd.DataFrame, pontos: pd.DataFrame, raio_km: float = 300.0) 
 
 
 def gerar(por_grupo: int = 1, mw_minimo: float = 1.0, mw_minimo_grupo: float = 50.0,
-          min_km: float = 50.0, max_km_uf: float = 700.0, saida: Path = SAIDA,
-          gravar: bool = True) -> pd.DataFrame:
-    cand = candidatas(mw_minimo, max_km_uf)
+          min_km: float = 50.0, max_km_uf: float = 700.0, entrada: Path = ENTRADA,
+          saida: Path = SAIDA, gravar: bool = True) -> pd.DataFrame:
+    cand = candidatas(mw_minimo, max_km_uf, entrada)
     pontos = selecionar(cand, por_grupo, mw_minimo_grupo, min_km)
     cobertura(cand, pontos)
     if gravar:
