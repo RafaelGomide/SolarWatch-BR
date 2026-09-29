@@ -240,6 +240,7 @@ O projeto tem ressalvas reais, e a interface as mostra em vez de escondê-las at
 | 212 das 308 unidades sem potência confiável | Etiqueta "sem cadastro" na tabela e "cadastro parcial" na página da usina, com link para o critério |
 | Previsão por usina é um rateio | Nota abaixo do gráfico, com a participação exata (ex.: "rateio de 0,55% da previsão da fonte") |
 | Clima é do ponto mais próximo, não da usina | "Ponto `caetite_ba` · 7 km da usina · vínculo mais_proximo" |
+| Cada variável da NASA tem sua própria latência | "irradiância sem valor em 5 dia(s), no fim da série (latência de publicação)" — a partir de `medidas_faltantes`, na mesma linha de origem do clima |
 | Clima do horizonte é suposto conhecido | Frase da API repetida na nota da previsão |
 | Horas sem medição | Contagem em vermelho no resumo ("N h sem medição") e lacuna no gráfico |
 | Dado não é tempo real | KPI "período coberto" + "atualizado pelo ETL, não em tempo real" |

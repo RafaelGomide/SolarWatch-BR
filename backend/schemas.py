@@ -89,6 +89,9 @@ class PontoClima(BaseModel):
     temperatura_max_c: float | None = None
     temperatura_min_c: float | None = None
     flag_qualidade: str
+    medidas_faltantes: str | None = Field(
+        default=None,
+        description="Variáveis sem valor no dia, separadas por vírgula (latência de publicação da NASA POWER)")
 
 
 class SerieClima(BaseModel):

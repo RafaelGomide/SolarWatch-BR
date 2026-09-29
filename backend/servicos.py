@@ -155,7 +155,7 @@ def serie_clima(cur: duckdb.DuckDBPyConnection, usina_id: int,
 
     dados = cur.execute(
         f"""SELECT data, irradiancia_kwh_m2, vento_ms, temperatura_c,
-                   temperatura_max_c, temperatura_min_c, flag_qualidade,
+                   temperatura_max_c, temperatura_min_c, flag_qualidade, medidas_faltantes,
                    local_clima, distancia_km, metodo_vinculo_clima
             FROM fato_clima WHERE {' AND '.join(condicoes)} ORDER BY data""",
         parametros).df()

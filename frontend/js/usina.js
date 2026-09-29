@@ -86,7 +86,8 @@ async function carregarClima() {
     el("origem-clima").innerHTML =
       `Ponto <code>${escapar(estado.clima.local_clima)}</code> · ` +
       `${estado.clima.distancia_km == null ? "mesma UF" : `${fmt.inteiro(estado.clima.distancia_km)} km da usina`} · ` +
-      `<span title="${escapar(estado.clima.aviso)}">vínculo ${escapar(estado.clima.metodo_vinculo_clima)}</span>`;
+      `<span title="${escapar(estado.clima.aviso)}">vínculo ${escapar(estado.clima.metodo_vinculo_clima)}</span>` +
+      latenciaDaSerie(estado.clima.data, ehSolar ? "irradiancia_kwh_m2" : "vento_ms");
   } catch (erro) {
     if (erro.status === 404) {
       destino.innerHTML = '<p class="tabela__vazio">Sem ponto de clima de referência para esta unidade.</p>';
@@ -94,6 +95,19 @@ async function carregarClima() {
       mostrarErro(destino, erro);
     }
   }
+}
+
+/* A NASA publica cada variável com uma latência diferente (vento e temperatura
+   em ~2 dias, irradiância diária em ~1 semana), então é comum a série terminar
+   com alguns dias sem UMA das variáveis. `medidas_faltantes` vem da API dizendo
+   quais; sem isso o gráfico só mostraria um buraco no fim, sem explicação. */
+function latenciaDaSerie(pontos, medida) {
+  const faltando = pontos.filter((p) => (p.medidas_faltantes ?? "").split(",").includes(medida));
+  if (!faltando.length) return "";
+  const rotulo = medida === "irradiancia_kwh_m2" ? "irradiância" : "vento";
+  const ultimo = faltando[faltando.length - 1].data === pontos[pontos.length - 1].data;
+  return ` · <span style="color:var(--cor-aviso)" title="A NASA POWER publica cada variável com atraso próprio; os dias sem valor não são interpolados.">`
+    + `${rotulo} sem valor em ${faltando.length} dia(s)${ultimo ? ", no fim da série (latência de publicação)" : ""}</span>`;
 }
 
 /* -------------------------------- previsão -------------------------------- */

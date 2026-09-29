@@ -14,7 +14,7 @@ import pandas as pd
 
 import ds_toolkit as dst
 from ETL.config import DISTANCIA_MAXIMA_CLIMA_KM, FONTES_CURATED, VERBOSE_TOOLKIT
-from ETL.utils import haversine_km
+from ETL.utils import haversine_km, listar_faltantes
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,10 @@ def _ponto_clima_por_usina(dim: pd.DataFrame, locais: pd.DataFrame) -> pd.DataFr
     return pd.DataFrame(linhas, columns=["usina_id", "local_clima", "distancia_km", "metodo_vinculo_clima"])
 
 
+MEDIDAS_CLIMA = ["irradiancia_kwh_m2", "vento_ms", "vento_10m_ms", "temperatura_c",
+                 "temperatura_max_c", "temperatura_min_c"]
+
+
 def fato_clima(nasa_diario: pd.DataFrame, dim: pd.DataFrame) -> pd.DataFrame:
     """Grão usina x dia, a partir da série DIÁRIA da NASA (dia em hora solar
     local ≈ dia de Brasília). A clima vem do ponto de coleta de referência, não
@@ -79,9 +83,12 @@ def fato_clima(nasa_diario: pd.DataFrame, dim: pd.DataFrame) -> pd.DataFrame:
     fato = dst.mesclar_seguro(vinculo, diario, on="local_clima", como="inner",
                               validar="many_to_many", verbose=VERBOSE_TOOLKIT)
     fato["data"] = fato["data"].dt.date
+    # Recalculado sobre os nomes já renomeados: quem consome a fato (API, frontend)
+    # não deve precisar conhecer os nomes da camada clean
+    fato["medidas_faltantes"] = listar_faltantes(fato, MEDIDAS_CLIMA)
     fato = fato[["usina_id", "data", "irradiancia_kwh_m2", "vento_ms", "vento_10m_ms",
                  "temperatura_c", "temperatura_max_c", "temperatura_min_c", "flag_qualidade",
-                 "local_clima", "distancia_km", "metodo_vinculo_clima"]]
+                 "medidas_faltantes", "local_clima", "distancia_km", "metodo_vinculo_clima"]]
     log.info("[curated:fato_clima] %d linhas | vínculo: %s", len(fato),
              vinculo["metodo_vinculo_clima"].value_counts().to_dict())
     return fato.sort_values(["usina_id", "data"])

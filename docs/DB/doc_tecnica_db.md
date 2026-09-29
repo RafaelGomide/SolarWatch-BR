@@ -219,6 +219,7 @@ CREATE TABLE fato_clima (
     temperatura_max_c DOUBLE,
     temperatura_min_c DOUBLE,
     flag_qualidade VARCHAR NOT NULL,
+    medidas_faltantes VARCHAR,      -- quais variáveis faltaram no dia
     local_clima VARCHAR NOT NULL,
     distancia_km DOUBLE,
     metodo_vinculo_clima VARCHAR NOT NULL,
@@ -227,7 +228,16 @@ CREATE TABLE fato_clima (
 );
 ```
 
-O clima vem de **10 pontos da NASA POWER**, não da coordenada exata de cada usina. `local_clima`, `distancia_km` e `metodo_vinculo_clima` deixam a aproximação explícita, e a distância mediana é de 100 km. Dez unidades do subsistema Norte ficam sem clima, porque não há ponto de coleta lá.
+O clima vem de **pontos da NASA POWER**, não da coordenada exata de cada usina. `local_clima`, `distancia_km` e `metodo_vinculo_clima` deixam essa aproximação explícita. Dez unidades do subsistema Norte ficam sem clima, porque não há ponto de coleta lá.
+
+`medidas_faltantes` cobre a outra aproximação, a temporal: a NASA publica cada variável com um atraso diferente (vento e temperatura em ~2 dias, irradiância diária em ~1 semana), então os últimos dias da série têm parte das colunas nula. A coluna diz **quais**, para que um dia sem irradiância não seja confundido com um dia sem nenhuma medição:
+
+```sql
+SELECT medidas_faltantes, count(*) FROM fato_clima
+WHERE flag_qualidade = 'faltante' GROUP BY 1;
+-- irradiancia_kwh_m2                                    | 596
+-- irradiancia_kwh_m2,vento_ms,vento_10m_ms,temperatura_c,... | 894
+```
 
 ### 6.4 `fato_manutencao` — 159 linhas (**dado simulado**)
 

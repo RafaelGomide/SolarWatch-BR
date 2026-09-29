@@ -118,6 +118,23 @@ def interpolar_gaps_curtos(
     return df, interpolado, faltante
 
 
+def listar_faltantes(df: pd.DataFrame, colunas: list[str]) -> pd.Series:
+    """Nomes das medidas ainda nulas em cada linha, separados por vírgula (nulo se nenhuma).
+
+    O `flag_qualidade` diz *se* falta algo; esta coluna diz *o quê*. A distinção
+    importa por causa da latência desigual da NASA POWER: a irradiância horária
+    sai com ~3 meses de atraso enquanto vento e temperatura atrasam ~2 dias,
+    então quase toda linha recente tem irradiância nula e o resto perfeitamente
+    utilizável. Sem esta coluna, `faltante` marcaria a série inteira e não daria
+    para saber que só uma variável está ausente.
+    """
+    nulos = df[colunas].isna()
+    # bool * str no numpy devolve o nome ou "", e o produto de matrizes concatena:
+    # vetorizado, sem apply linha a linha
+    lista = nulos.dot(np.array([f"{c}," for c in colunas], dtype=object)).str.rstrip(",")
+    return lista.replace("", pd.NA).astype("string")
+
+
 def flag_qualidade(interpolado: pd.Series, faltante: pd.Series, extra: pd.Series | None = None) -> pd.Series:
     """Flag textual por linha: 'faltante' > 'interpolado' > flag extra > 'original'."""
     flag = pd.Series("original", index=interpolado.index, dtype="string")

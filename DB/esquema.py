@@ -83,6 +83,7 @@ TABELAS: dict[str, dict] = {
             ("temperatura_max_c", "DOUBLE", False, "Temperatura máxima"),
             ("temperatura_min_c", "DOUBLE", False, "Temperatura mínima"),
             ("flag_qualidade", "VARCHAR", True, "original | interpolado | faltante"),
+            ("medidas_faltantes", "VARCHAR", False, "Variáveis nulas no dia (latência da NASA), separadas por vírgula"),
             ("local_clima", "VARCHAR", True, "Ponto NASA usado como referência"),
             ("distancia_km", "DOUBLE", False, "Distância usina → ponto NASA"),
             ("metodo_vinculo_clima", "VARCHAR", True, "mais_proximo | mais_proximo_distante | mesma_uf | mesmo_subsistema"),

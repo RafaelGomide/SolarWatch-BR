@@ -246,13 +246,25 @@ preencher = nulo & (tamanho <= max_gap) & estimado.notna()
 
 Gera a coluna textual `flag_qualidade`, com precedência **`faltante` > `interpolado` > flag extra > `original`**. A flag extra é específica da fonte, por exemplo `negativo_zerado` no ONS.
 
-### 6.5 `normalizar_nome(df, coluna, destino)`
+### 6.5 `listar_faltantes(df, colunas)`
+
+Coluna textual com os **nomes** das medidas que continuaram nulas em cada linha, separados por vírgula (nulo quando não falta nada).
+
+O `flag_qualidade` responde *se* falta algo; esta responde *o quê*. A distinção existe porque a latência da NASA POWER é **desigual por variável**: vento e temperatura atrasam ~2 dias, a irradiância diária ~1 semana e a irradiância horária ~3 meses. Sem esta coluna, um dia em que só a irradiância não saiu fica marcado exatamente como um dia sem nenhuma medição — e, na série horária, isso significava marcar **as 19.200 linhas** como `faltante` por causa de uma única variável, com vento e temperatura perfeitamente utilizáveis ao lado.
+
+A implementação é vetorizada, sem `apply` linha a linha: em `numpy`, `True * "nome"` devolve `"nome"` e `False * "nome"` devolve `""`, então o produto de matrizes da máscara de nulos pelos nomes já concatena o resultado.
+
+```python
+nulos.dot(np.array([f"{c}," for c in colunas], dtype=object)).str.rstrip(",")
+```
+
+### 6.6 `normalizar_nome(df, coluna, destino)`
 
 Chave de comparação de nomes: minúsculas, sem acento, sem pontuação e sem espaços repetidos (`"Caetité  2"`, `"CAETITE 2"` e `"caetite-2"` viram `"caetite 2"`). Usa `ds_toolkit.padronizar_texto`.
 
 **Otimização:** normaliza só os **valores distintos** e mapeia de volta. O ONS tem 1,36 milhão de linhas e cerca de 1.200 nomes distintos, então isso é ~1.000× menos trabalho de string.
 
-### 6.6 Outros
+### 6.7 Outros
 
 | Função | O que faz |
 |---|---|
@@ -319,6 +331,13 @@ Entrada: 1.365.096 linhas (usina/conjunto × hora, jul a set/2026, todas as font
 
 **Alerta:** na coleta atual, as 19.200 linhas saem como `faltante`. A **irradiância horária** da NASA é publicada com cerca de **3 meses de atraso** (último valor válido em 30/06/2026), então o período jul a set/2026 inteiro veio `-999` nessa coluna. Vento e temperatura horários estão completos, exceto nas últimas ~48 h. Por isso esta tabela serve para análises horárias de vento e temperatura, e a `fato_clima` usa a **série diária** (7.3).
 
+É justamente aqui que o `flag_qualidade` sozinho engana: 100% das linhas marcadas `faltante`, sendo que em 18.720 delas **só** a irradiância está ausente. A coluna `medidas_faltantes` ([§6.5](#65-listar_faltantesdf-colunas)) separa os dois casos, e o log da etapa passou a imprimir os nulos por medida:
+
+```
+[clean:nasa] nulos por medida: {'irradiancia_wh_m2': 19200, 'vento_10m_ms': 480,
+                                'vento_50m_ms': 480, 'temperatura_2m_c': 480}
+```
+
 ### 7.3 NASA diária — `clean/nasa.py::limpar_diario` → `nasa_clima_diario.parquet`
 
 Série criada na ingestão justamente para contornar a latência da irradiância horária. Detalhes em `doc_tecnica_ingestao.md` §7.
@@ -329,7 +348,7 @@ Série criada na ingestão justamente para contornar a latência da irradiância
 | Tempo | `data_lst` (`AAAAMMDD`) → `data`. O dia é em **hora solar local**, a menos de 1 h do horário de Brasília nas longitudes do país |
 | Grade + gaps | Grade diária (`freq="D"`). Buracos de **1 dia** são interpolados (`MAX_GAP_INTERPOLACAO_DIAS = 1`); o resto (latência no fim da série) fica `faltante` |
 
-Resultado: 800 linhas (10 locais × 80 dias). 740 `original`, 10 `interpolado` e 50 `faltante`, todas a partir de 14/09 (latência).
+Resultado: 800 linhas (10 locais × 80 dias). 740 `original`, 10 `interpolado` e 50 `faltante`, todas a partir de 14/09 (latência). Das 50, **20 têm só a irradiância ausente** e 30 não têm nenhuma medida — as duas latências diferentes aparecendo lado a lado, e agora distinguíveis por `medidas_faltantes`.
 
 ### 7.4 ANEEL — `clean/aneel.py` → `aneel_usinas.parquet`
 
@@ -497,9 +516,11 @@ A NASA foi coletada em **10 pontos** (`ingestao/nasa_power/locais.csv`), não em
 
 Distância usina → ponto (com coordenadas): mediana de 100 km, máxima de 834 km.
 
-A série é a **diária** da NASA (clean 7.3), renomeada para o vocabulário do DDL: `irradiancia_kwh_m2`, `vento_ms` (**a 50 m**, altura mais próxima do cubo dos aerogeradores), `temperatura_c` (média), mais `vento_10m_ms`, `temperatura_max_c`, `temperatura_min_c`, `flag_qualidade`, `local_clima`, `distancia_km` e `metodo_vinculo_clima`. As três últimas deixam a **aproximação explícita**.
+A série é a **diária** da NASA (clean 7.3) — e não a horária, precisamente por causa da latência de 3 meses da irradiância horária. Ela é renomeada para o vocabulário do DDL: `irradiancia_kwh_m2`, `vento_ms` (**a 50 m**, altura mais próxima do cubo dos aerogeradores), `temperatura_c` (média), mais `vento_10m_ms`, `temperatura_max_c`, `temperatura_min_c`, `flag_qualidade`, `medidas_faltantes`, `local_clima`, `distancia_km` e `metodo_vinculo_clima`. As três últimas deixam a **aproximação espacial** explícita; `medidas_faltantes` deixa explícita a **temporal**.
 
-Resultado: 23.840 linhas (298 unidades × 80 dias, de 01/07 a 18/09/2026). 22.052 `original`, 298 `interpolado` e 1.490 `faltante` (latência NASA no fim da série).
+`medidas_faltantes` é **recalculado** aqui, depois do rename, em vez de ser copiado do clean: quem consome a fato (API, frontend) não deve precisar saber que na camada clean a coluna se chamava `irradiancia_kwh_m2_dia`.
+
+Resultado: 23.840 linhas (298 unidades × 80 dias, de 01/07 a 18/09/2026). 22.052 `original`, 298 `interpolado` e 1.490 `faltante` (latência NASA no fim da série). Dessas 1.490, **596 têm só a irradiância ausente** e 894 não têm nenhuma medida.
 
 ### 8.6 `fato_manutencao` — grão usina (SIMULADO)
 

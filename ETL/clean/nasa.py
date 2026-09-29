@@ -5,7 +5,10 @@
 - nomes de parâmetros da NASA -> nomes descritivos com unidade;
 - duplicatas por (local, hora) removidas;
 - grade horária completa; gaps de até 3 h interpolados, maiores (ex.: latência
-  de ~2 dias da NASA no fim da série) mantidos nulos com flag 'faltante'.
+  de ~2 dias da NASA no fim da série) mantidos nulos com flag 'faltante';
+- `medidas_faltantes` diz *quais* variáveis ficaram nulas: a irradiância horária
+  é publicada com ~3 meses de atraso, então nesta série ela costuma faltar em
+  todas as linhas recentes enquanto vento e temperatura estão disponíveis.
 """
 
 from __future__ import annotations
@@ -18,7 +21,8 @@ import pandas as pd
 
 import ds_toolkit as dst
 from ETL.config import FUSO_BRASIL, MAX_GAP_INTERPOLACAO_H, VERBOSE_TOOLKIT
-from ETL.utils import completar_grade, flag_qualidade, interpolar_gaps_curtos
+from ETL.utils import (completar_grade, flag_qualidade, interpolar_gaps_curtos,
+                       listar_faltantes)
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +56,8 @@ def limpar(caminho: Path) -> pd.DataFrame:
 
     df, interpolado, faltante = interpolar_gaps_curtos(df, "local", medidas, MAX_GAP_INTERPOLACAO_H)
     df["flag_qualidade"] = flag_qualidade(interpolado, faltante)
+    df["medidas_faltantes"] = listar_faltantes(df, medidas)
+    log.info("[clean:nasa] nulos por medida: %s", df[medidas].isna().sum().to_dict())
 
     utc = df["instante"].dt.tz_localize("UTC")
     df["data_hora_utc"] = utc
@@ -59,7 +65,8 @@ def limpar(caminho: Path) -> pd.DataFrame:
 
     log.info("[clean:nasa] flags: %s", df["flag_qualidade"].value_counts().to_dict())
     return df[["local", "municipio", "id_estado", "id_subsistema", "latitude", "longitude",
-               "data_hora_utc", "data_hora_brasilia", *medidas, "flag_qualidade"]]
+               "data_hora_utc", "data_hora_brasilia", *medidas, "flag_qualidade",
+               "medidas_faltantes"]]
 
 
 PARAMETROS_DIARIOS = {
@@ -76,9 +83,10 @@ MAX_GAP_INTERPOLACAO_DIAS = 1
 def limpar_diario(caminho: Path) -> pd.DataFrame:
     """Série DIÁRIA da NASA (dia em hora solar local, ~horário de Brasília).
 
-    É a fonte da irradiância recente: a horária é publicada com ~3 meses de atraso.
+    É a fonte da irradiância recente (e, por isso, a que alimenta a `fato_clima`):
+    a horária é publicada com ~3 meses de atraso, a diária com ~1 semana.
     Gaps de 1 dia são interpolados; os demais (latência no fim da série) ficam
-    nulos com flag 'faltante'.
+    nulos com flag 'faltante' e com o nome das variáveis em `medidas_faltantes`.
     """
     df = pd.read_parquet(caminho)
     log.info("[clean:nasa_diario] %s: %d linhas", caminho.parent.name, len(df))
@@ -98,7 +106,9 @@ def limpar_diario(caminho: Path) -> pd.DataFrame:
 
     df, interpolado, faltante = interpolar_gaps_curtos(df, "local", medidas, MAX_GAP_INTERPOLACAO_DIAS)
     df["flag_qualidade"] = flag_qualidade(interpolado, faltante)
+    df["medidas_faltantes"] = listar_faltantes(df, medidas)
+    log.info("[clean:nasa_diario] nulos por medida: %s", df[medidas].isna().sum().to_dict())
 
     log.info("[clean:nasa_diario] flags: %s", df["flag_qualidade"].value_counts().to_dict())
     return df[["local", "municipio", "id_estado", "id_subsistema", "latitude", "longitude",
-               "data", *medidas, "flag_qualidade"]]
+               "data", *medidas, "flag_qualidade", "medidas_faltantes"]]
