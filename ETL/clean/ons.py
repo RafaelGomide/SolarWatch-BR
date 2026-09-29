@@ -23,7 +23,7 @@ import pandas as pd
 import ds_toolkit as dst
 from ETL.config import FONTE_ONS, FUSO_BRASIL, MAX_GAP_INTERPOLACAO_H, TIPO_UNIDADE_ONS, VERBOSE_TOOLKIT
 from ETL.utils import (completar_grade, flag_qualidade, interpolar_gaps_curtos,
-                       limpar_textos, normalizar_nome)
+                       ler_parquet, limpar_textos, normalizar_nome)
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +35,8 @@ ATRIBUTOS_UNIDADE = ["id_ons", "ceg", "modalidade_ons", "tipo_unidade", "fonte",
 
 
 def limpar(caminho: Path) -> pd.DataFrame:
-    df = pd.read_parquet(caminho)
+    """`caminho` é a pasta mensal do bruto do ONS (um Parquet por mês)."""
+    df = ler_parquet(caminho)
     log.info("[clean:ons] %s: %d linhas", caminho.parent.name, len(df))
 
     df = limpar_textos(df, COLUNAS_TEXTO, vazios=("", "-"))

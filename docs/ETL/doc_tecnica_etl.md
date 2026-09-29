@@ -133,7 +133,7 @@ Todos os parâmetros ajustáveis ficam em um único arquivo.
 | Constante | Valor | Uso |
 |---|---|---|
 | `BRUTO`, `SIMULADOS`, `CLEAN`, `CURATED` | `dados/bruto`, `dados/simulados`, `dados/limpos/clean`, `dados/limpos/curated` | Caminhos das camadas |
-| `ARQUIVOS_BRUTOS` | ons, nasa, nasa_diario, aneel | Nome do arquivo bruto de cada fonte |
+| `ARQUIVOS_BRUTOS` | ons, nasa, nasa_diario, aneel | Nome do arquivo bruto de cada fonte — **pasta**, no caso do ONS (um Parquet por mês) |
 | `FUSO_BRASIL` | `America/Sao_Paulo` | Fuso de origem do ONS |
 | `MAX_GAP_INTERPOLACAO_H` | `3` | Maior buraco horário que é interpolado |
 | `POTENCIA_MINIMA_MW_VINCULO` | `1.0` | Usinas ANEEL elegíveis para o vínculo por nome |
@@ -158,35 +158,64 @@ A ingestão sempre sobrescreve `dados/bruto/dados_<fonte>_bruto.parquet`, então
 
 ```
 dados/bruto/
-├── dados_ons_bruto.parquet            ← última saída da ingestão (área de trabalho)
+├── dados_ons_bruto/                   ← última saída da ingestão (área de trabalho)
+│   ├── dados_ons_bruto_2026_07.parquet    um Parquet por mês
+│   ├── dados_ons_bruto_2026_08.parquet
+│   └── dados_ons_bruto_2026_09.parquet
 ├── dados_nasa_bruto.parquet
 ├── dados_nasa_diario_bruto.parquet
 ├── dados_aneel_bruto.parquet
 └── 2026-09-18/                        ← partição da coleta de 18/09/2026
-    ├── dados_ons_bruto.parquet
+    ├── dados_ons_bruto/
+    │   ├── dados_ons_bruto_2026_07.parquet
+    │   ├── dados_ons_bruto_2026_08.parquet
+    │   └── dados_ons_bruto_2026_09.parquet
     ├── dados_nasa_bruto.parquet
     ├── dados_nasa_diario_bruto.parquet
     └── dados_aneel_bruto.parquet
 ```
 
+O ONS é uma **pasta** porque a ingestão grava um Parquet por mês (ver [§6.2.1 da doc de ingestão](../ingestao/doc_tecnica_ingestao.md#621-um-parquet-por-mês)). A raw trata os dois casos com o mesmo código: `_arquivos(origem)` devolve `[o próprio arquivo]` ou o `glob("*.parquet")` da pasta, e cada arquivo é copiado individualmente por `_copiar`.
+
 A convenção do repositório é `dados/`, em português. O overview citava `data/raw/`. O conceito é o mesmo.
 
 ### 5.2 `particionar(data_coleta=None)`
 
-- Para cada arquivo de `ARQUIVOS_BRUTOS`, a **data de coleta** é a data de modificação do arquivo (`st_mtime`), ou seja, o dia em que a ingestão o gravou.
+- Para cada arquivo de `ARQUIVOS_BRUTOS`, a **data de coleta** é a data de modificação do arquivo (`st_mtime`), ou seja, o dia em que a ingestão o gravou. Numa pasta mensal, é o mtime **mais recente** entre os meses: a partição registra quando aquela coleta terminou, e um mês antigo que não foi rebaixado não puxa a data para trás.
 - Copia com `shutil.copy2`, que **preserva o mtime**. Assim a cópia carrega a própria data de coleta.
-- **Idempotente:** se a partição já tem o arquivo com o mesmo tamanho e o mesmo mtime, nada é copiado. Rodar a pipeline dez vezes no mesmo dia não duplica nada. Se a ingestão rodar de novo no mesmo dia, o mtime muda e a cópia daquele dia é atualizada.
+- **Idempotente:** se a partição já tem o arquivo com o mesmo tamanho e o mesmo mtime, nada é copiado. Na pasta do ONS a checagem é por arquivo, então reingerir só outubro copia só aquele mês. Rodar a pipeline dez vezes no mesmo dia não duplica nada. Se a ingestão rodar de novo no mesmo dia, o mtime muda e a cópia daquele dia é atualizada.
 - Fonte ausente → aviso no log, sem erro. Isso permite rodar o ETL mesmo sem ter ingerido todas as fontes, e o clean acusa a falta depois.
 
 ### 5.3 `localizar(fonte, data_coleta=None)`
 
-Devolve o caminho do bruto de uma fonte na **partição mais recente que contém aquele arquivo**, ou na partição pedida. As fontes podem ter sido coletadas em dias diferentes (por exemplo, a ANEEL ontem e o ONS hoje), e cada uma é resolvida separadamente. Se não houver partição, levanta `FileNotFoundError` com instrução de como resolver.
+Devolve o caminho do bruto de uma fonte na **partição mais recente que contém aquele arquivo** (ou pasta não vazia, no caso do ONS), ou na partição pedida. As fontes podem ter sido coletadas em dias diferentes (por exemplo, a ANEEL ontem e o ONS hoje), e cada uma é resolvida separadamente. Se não houver partição, levanta `FileNotFoundError` com instrução de como resolver.
 
 ---
 
 ## 6. Utilitários (`utils.py`)
 
-### 6.1 `completar_grade(df, chave, tempo, colunas_fixas, freq="h")`
+### 6.1 `ler_parquet(caminho)`
+
+Lê o bruto de uma fonte sem o consumidor precisar saber se é arquivo ou pasta:
+
+```python
+if caminho.is_file():
+    return pd.read_parquet(caminho)
+
+arquivos = sorted(caminho.glob("*.parquet"))      # dados_ons_bruto/*.parquet
+if not arquivos:
+    raise FileNotFoundError(f"Nenhum .parquet em {caminho}")
+return pd.concat((pd.read_parquet(a) for a in arquivos), ignore_index=True)
+```
+
+Dois detalhes:
+
+- O **glob explícito** em vez de entregar a pasta ao pyarrow: o `pd.read_parquet` de um diretório tenta ler *todo* arquivo que encontrar, e uma sobra de escrita interrompida (`.parquet.tmp`) quebraria a leitura. O `*.parquet` ignora essas sobras. É também o mesmo padrão que o DuckDB aceita nativamente em `read_parquet('.../*.parquet')`, caso a leitura passe para SQL.
+- O `sorted` torna a ordem das linhas determinística (meses em ordem cronológica, porque o nome termina em `AAAA_MM`), o que faz a saída do clean ser reproduzível byte a byte.
+
+Verificação: depois da mudança, `ons_geracao` e as quatro tabelas curated saíram **idênticas** às geradas a partir do Parquet único — mesmas 1.365.096 linhas, mesmos dtypes, mesmo hash de conteúdo.
+
+### 6.2 `completar_grade(df, chave, tempo, colunas_fixas, freq="h")`
 
 Garante **uma linha por período** (`h` = hora, `D` = dia) entre a primeira e a última observação de cada série (`chave`).
 
@@ -196,7 +225,7 @@ Garante **uma linha por período** (`h` = hora, `D` = dia) entre a primeira e a 
 
 Motivação: um buraco pode aparecer como **valor nulo** ou como **linha ausente**. Depois da grade, os dois viram a mesma coisa (nulo) e recebem o mesmo tratamento.
 
-### 6.2 `interpolar_gaps_curtos(df, chave, colunas, max_gap)`
+### 6.3 `interpolar_gaps_curtos(df, chave, colunas, max_gap)`
 
 Interpola linearmente **apenas** os buracos de até `max_gap` valores consecutivos, dentro de cada série.
 
@@ -213,17 +242,17 @@ preencher = nulo & (tamanho <= max_gap) & estimado.notna()
 - `limit_area="inside"`: só interpola entre dois valores válidos, nunca extrapola as pontas. Um buraco no fim da série, como a latência da NASA, nunca é inventado.
 - Devolve duas máscaras por linha: `interpolado` (algum valor foi preenchido) e `faltante` (algum valor continua nulo).
 
-### 6.3 `flag_qualidade(interpolado, faltante, extra=None)`
+### 6.4 `flag_qualidade(interpolado, faltante, extra=None)`
 
 Gera a coluna textual `flag_qualidade`, com precedência **`faltante` > `interpolado` > flag extra > `original`**. A flag extra é específica da fonte, por exemplo `negativo_zerado` no ONS.
 
-### 6.4 `normalizar_nome(df, coluna, destino)`
+### 6.5 `normalizar_nome(df, coluna, destino)`
 
 Chave de comparação de nomes: minúsculas, sem acento, sem pontuação e sem espaços repetidos (`"Caetité  2"`, `"CAETITE 2"` e `"caetite-2"` viram `"caetite 2"`). Usa `ds_toolkit.padronizar_texto`.
 
 **Otimização:** normaliza só os **valores distintos** e mapeia de volta. O ONS tem 1,36 milhão de linhas e cerca de 1.200 nomes distintos, então isso é ~1.000× menos trabalho de string.
 
-### 6.5 Outros
+### 6.6 Outros
 
 | Função | O que faz |
 |---|---|

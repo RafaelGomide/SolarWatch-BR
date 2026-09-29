@@ -15,6 +15,23 @@ from ingestao.armazenamento import gravar_parquet
 log = logging.getLogger(__name__)
 
 
+def ler_parquet(caminho: Path) -> pd.DataFrame:
+    """Lê um Parquet ou, se `caminho` for pasta, todos os `*.parquet` dela.
+
+    O bruto do ONS é gravado como um arquivo por mês; a pasta inteira é lida
+    como um único dataset (glob `dados_ons_bruto/*.parquet`). O glob também
+    ignora sobras de escrita interrompida (`.parquet.tmp`).
+    """
+    if caminho.is_file():
+        return pd.read_parquet(caminho)
+
+    arquivos = sorted(caminho.glob("*.parquet"))
+    if not arquivos:
+        raise FileNotFoundError(f"Nenhum .parquet em {caminho}")
+    log.info("[ler] %s: %d arquivo(s)", caminho.name, len(arquivos))
+    return pd.concat((pd.read_parquet(a) for a in arquivos), ignore_index=True)
+
+
 def gravar(df: pd.DataFrame, pasta: Path, nome: str) -> Path:
     """Grava uma tabela da camada em Parquet (escrita atômica, zstd)."""
     return gravar_parquet(df.reset_index(drop=True), pasta / f"{nome}.parquet")

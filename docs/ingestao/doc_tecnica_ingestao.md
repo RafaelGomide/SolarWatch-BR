@@ -26,7 +26,7 @@
 
 | Fonte | O que traz | Grão | Forma de acesso | Saída |
 |---|---|---|---|---|
-| **ONS** — Operador Nacional do Sistema Elétrico | Geração verificada (MWmed) por usina/conjunto, com subsistema, estado e tipo de fonte (hidráulica, térmica, eólica, fotovoltaica, nuclear) | usina × hora | API CKAN do portal (descoberta) + Parquets mensais no S3 | `dados/bruto/dados_ons_bruto.parquet` |
+| **ONS** — Operador Nacional do Sistema Elétrico | Geração verificada (MWmed) por usina/conjunto, com subsistema, estado e tipo de fonte (hidráulica, térmica, eólica, fotovoltaica, nuclear) | usina × hora | API CKAN do portal (descoberta) + Parquets mensais no S3 | `dados/bruto/dados_ons_bruto/` (um Parquet por mês) |
 | **NASA POWER** | Irradiância solar, vento a 10 m e 50 m, temperatura a 2 m | coordenada × hora (UTC) **e** coordenada × dia (LST) | API REST `temporal/hourly/point` e `temporal/daily/point` | `dados/bruto/dados_nasa_bruto.parquet` + `dados/bruto/dados_nasa_diario_bruto.parquet` |
 | **ANEEL — SIGA** | Cadastro de empreendimentos solares (UFV) e eólicos (EOL): nome, CEG, potência, município, fase, data de entrada em operação, coordenadas | empreendimento | API CKAN `datastore_search` (paginada) | `dados/bruto/dados_aneel_bruto.parquet` |
 
@@ -38,7 +38,7 @@ O objetivo analítico é cruzar **o que foi gerado** (ONS) com **as condições 
 
 | Arquivo | Linhas | Tamanho (Parquet) | Tamanho equivalente em CSV | Período |
 |---|---|---|---|---|
-| `dados_ons_bruto.parquet` | 1.365.096 | ~10,4 MB | ~214 MB | 01/07/2026 00h → 17/09/2026 23h |
+| `dados_ons_bruto/` (3 arquivos mensais) | 1.365.096 | ~10,4 MB | ~214 MB | 01/07/2026 00h → 17/09/2026 23h |
 | `dados_nasa_bruto.parquet` | 19.200 | ~0,1 MB | ~1,5 MB | 01/07/2026 00h → 18/09/2026 23h (UTC), 10 locais |
 | `dados_nasa_diario_bruto.parquet` | 800 | <0,1 MB | — | 01/07/2026 → 18/09/2026 (dias LST), 10 locais |
 | `dados_aneel_bruto.parquet` | 20.511 | ~0,8 MB | ~6 MB | retrato do cadastro em 18/09/2026 |
@@ -70,7 +70,10 @@ SolarWatch-BR/
 │       └── ingestao_aneel.py
 ├── dados/
 │   └── bruto/                  # raw layer (NÃO versionado)
-│       ├── dados_ons_bruto.parquet
+│       ├── dados_ons_bruto/            # um Parquet por mês
+│       │   ├── dados_ons_bruto_2026_07.parquet
+│       │   ├── dados_ons_bruto_2026_08.parquet
+│       │   └── dados_ons_bruto_2026_09.parquet
 │       ├── dados_nasa_bruto.parquet
 │       ├── dados_nasa_diario_bruto.parquet
 │       └── dados_aneel_bruto.parquet
@@ -273,10 +276,24 @@ main()
      │    ├─ url = publicados[(ano, mes)]  ou  URL_ARQUIVO montada pelo padrão
      │    ├─ get_com_retry(url)
      │    ├─ 404 → log "ainda não publicado" e pula
-     │    └─ pd.read_parquet(BytesIO(conteudo))  + coluna arquivo_origem
-     ├─ nenhum mês baixado → SystemExit com mensagem
-     └─ concat → gravar_parquet → dados/bruto/dados_ons_bruto.parquet
+     │    ├─ pd.read_parquet(BytesIO(conteudo))  + coluna arquivo_origem
+     │    └─ gravar_parquet → dados/bruto/dados_ons_bruto/dados_ons_bruto_AAAA_MM.parquet
+     └─ nenhum mês gravado → SystemExit com mensagem
 ```
+
+### 6.2.1 Um Parquet por mês
+
+A primeira versão acumulava os meses numa lista e gravava um `concat` único em `dados_ons_bruto.parquet`. Agora **cada mês é gravado assim que é baixado**, na pasta `dados/bruto/dados_ons_bruto/`, e a pasta inteira é lida como um só dataset pelo glob `dados_ons_bruto/*.parquet`.
+
+Três razões:
+
+1. **Memória.** O `concat` mantinha todos os meses do período em RAM ao mesmo tempo, mais uma cópia durante a concatenação. Um mês são ~530 mil linhas; três meses cabem, mas baixar anos de histórico não. Gravando por mês, o pico de memória é o de **um** mês, independente do tamanho do período.
+2. **Ingestão incremental.** Rodar com `--inicio 2026-10 --fim 2026-10` acrescenta ou regrava só aquele mês, sem tocar nos demais. Antes, o arquivo consolidado era reescrito por inteiro com o período pedido — e um período menor *apagava* os meses anteriores.
+3. **Falha parcial não perde tudo.** Se a rede cair no quinto de doze meses, os quatro já gravados continuam lá. Cada arquivo é escrito atomicamente pelo `gravar_parquet` ([§4.5](#45-formato-de-saída-parquet)), então nunca existe um mês pela metade.
+
+O custo é ler uma pasta em vez de um arquivo: quem consome o bruto usa `ETL.utils.ler_parquet`, que faz o glob (detalhado na [doc do ETL](../ETL/doc_tecnica_etl.md)). O DuckDB leria a mesma pasta nativamente com `read_parquet('dados/bruto/dados_ons_bruto/*.parquet')`.
+
+Nomes dos arquivos: `dados_ons_bruto_AAAA_MM.parquet`. A coluna `arquivo_origem` continua guardando o nome do arquivo **do ONS** (`GERACAO_USINA-2_2026_07.parquet`), que é a procedência real do dado.
 
 ### 6.3 Descoberta de arquivos: `_urls_disponiveis`
 
@@ -300,9 +317,9 @@ Gera a lista `[(ano, mes), ...]` de `inicio` a `fim`, inclusive, virando o ano c
 
 ### 6.5 Mês ainda não publicado
 
-O mês corrente é publicado de forma parcial e incremental pelo ONS (na execução de 17/09, setembro vinha até o dia 16). Um mês futuro, ou recém-iniciado e ainda não publicado, retorna `404` do S3. `get_com_retry` devolve o 404 sem retry e o script **pula o mês com um aviso** em vez de falhar. Se nenhum mês do período existir, o script termina com `SystemExit("Nenhum arquivo baixado para o período informado.")`, o que evita gravar um arquivo vazio por cima de um bom.
+O mês corrente é publicado de forma parcial e incremental pelo ONS (na execução de 17/09, setembro vinha até o dia 16). Um mês futuro, ou recém-iniciado e ainda não publicado, retorna `404` do S3. `get_com_retry` devolve o 404 sem retry e o script **pula o mês com um aviso** em vez de falhar. Se nenhum mês do período existir, o script termina com `SystemExit("Nenhum arquivo baixado para o período informado.")`, o que evita criar uma pasta vazia. Meses gravados em execuções anteriores não são afetados.
 
-### 6.6 Esquema de `dados_ons_bruto.parquet`
+### 6.6 Esquema dos Parquets de `dados_ons_bruto/`
 
 | Coluna | Exemplo | Descrição |
 |---|---|---|
@@ -663,7 +680,7 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 
 | # | Limitação | Impacto | Sugestão |
 |---|---|---|---|
-| 1 | Os meses do ONS são concatenados em memória antes da escrita | Para anos de histórico (~530 mil linhas/mês), a RAM volta a pesar | Gravar um Parquet por mês (`dados/bruto/ons/AAAA_MM.parquet`) e deixar o DuckDB ler a pasta inteira com `read_parquet('.../*.parquet')` |
+| 1 | ~~Meses do ONS concatenados em memória~~ **Resolvido:** um Parquet por mês em `dados/bruto/dados_ons_bruto/`, lido por glob ([§6.2.1](#621-um-parquet-por-mês)) | — | — |
 | 2 | ~~Bruto em CSV~~ **Resolvido:** migrado para Parquet ([§4.5](#45-formato-de-saída-parquet)) | — | — |
 | 3 | `get_com_retry` repete erros `4xx` não-429 | Erro de parâmetro leva cerca de 30 s para ser reportado | Levantar imediatamente em `4xx` (exceto 429) |
 | 4 | Coordenadas de `locais.csv` definidas manualmente e aproximadas | Clima representativo do município, não da usina | Gerar `locais.csv` a partir das coordenadas da ANEEL (maiores usinas por UF) |

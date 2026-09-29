@@ -2,8 +2,13 @@
 
 Baixa os arquivos Parquet mensais do dataset `geracao-usina-2` (geração horária por usina,
 com subsistema, estado e tipo de fonte: eólica, fotovoltaica, hidráulica,
-térmica, nuclear) e consolida tudo, sem transformação, em
-`dados/bruto/dados_ons_bruto.parquet`.
+térmica, nuclear) e grava **um Parquet por mês**, sem transformação, na pasta
+`dados/bruto/dados_ons_bruto/`.
+
+Um arquivo por mês (e não um consolidado único) evita manter todos os meses em
+memória ao mesmo tempo, torna a ingestão incremental — rodar de novo só baixa e
+regrava os meses pedidos — e a pasta é lida como um só dataset pelo glob
+`dados_ons_bruto/*.parquet`.
 
 O ONS publica o mesmo dado em CSV (~70 MB/mês) e Parquet (~4,6 MB/mês); o
 Parquet é usado por ser ~15x menor e já vir tipado pela própria fonte
@@ -42,7 +47,8 @@ URL_ARQUIVO = (
 PADRAO_MENSAL = re.compile(r"GERACAO_USINA-2_(\d{4})_(\d{2})\.parquet$")
 
 RAIZ = Path(__file__).resolve().parents[2]
-SAIDA = RAIZ / "dados" / "bruto" / "dados_ons_bruto.parquet"
+SAIDA = RAIZ / "dados" / "bruto" / "dados_ons_bruto"
+NOME_ARQUIVO = "dados_ons_bruto_{ano}_{mes:02d}.parquet"
 
 log = logging.getLogger("ingestao_ons")
 
@@ -78,10 +84,15 @@ def _parse_mes(valor: str) -> date:
 
 
 def baixar(inicio: date, fim: date, saida: Path = SAIDA) -> Path:
+    """Baixa cada mês do período e grava um Parquet por mês em `saida`.
+
+    Cada arquivo é gravado assim que é baixado: só um mês fica em memória por
+    vez, e uma queda no meio do período preserva os meses já gravados.
+    """
     sessao = nova_sessao()
     publicados = _urls_disponiveis(sessao)
 
-    frames = []
+    gravados = []
     for ano, mes in _meses(inicio, fim):
         url = publicados.get((ano, mes), URL_ARQUIVO.format(ano=ano, mes=mes))
         log.info("Baixando %04d-%02d: %s", ano, mes, url)
@@ -92,13 +103,13 @@ def baixar(inicio: date, fim: date, saida: Path = SAIDA) -> Path:
         # Tipos como publicados pelo ONS; nenhuma conversão adicional
         df = pd.read_parquet(BytesIO(resp.content), engine="pyarrow")
         df["arquivo_origem"] = url.rsplit("/", 1)[-1]
-        frames.append(df)
-        log.info("  %d linhas", len(df))
+        gravados.append(gravar_parquet(df, saida / NOME_ARQUIVO.format(ano=ano, mes=mes)))
 
-    if not frames:
+    if not gravados:
         raise SystemExit("Nenhum arquivo baixado para o período informado.")
 
-    return gravar_parquet(pd.concat(frames, ignore_index=True), saida)
+    log.info("%d mês(es) em %s", len(gravados), saida)
+    return saida
 
 
 def main() -> None:

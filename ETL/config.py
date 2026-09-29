@@ -12,8 +12,10 @@ SIMULADOS = RAIZ / "dados" / "simulados"
 CLEAN = RAIZ / "dados" / "limpos" / "clean"
 CURATED = RAIZ / "dados" / "limpos" / "curated"
 
+# Nome do arquivo (ou da pasta, no caso do ONS) de cada fonte dentro de `BRUTO`.
+# O ONS é uma pasta com um Parquet por mês, lida pelo glob `*.parquet`.
 ARQUIVOS_BRUTOS = {
-    "ons": "dados_ons_bruto.parquet",
+    "ons": "dados_ons_bruto",
     "nasa": "dados_nasa_bruto.parquet",
     "nasa_diario": "dados_nasa_diario_bruto.parquet",
     "aneel": "dados_aneel_bruto.parquet",
