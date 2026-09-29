@@ -59,6 +59,7 @@ SolarWatch-BR/
 ├── requirements.txt            # requests, pandas, python-dotenv, pyarrow (+ libs do ds_toolkit)
 ├── ingestao/
 │   ├── __init__.py
+│   ├── __main__.py             # orquestrador: python -m ingestao
 │   ├── http.py                 # GET com retry/backoff + sessão HTTP compartilhada
 │   ├── armazenamento.py        # gravação atômica em Parquet (camada bruta)
 │   ├── ONS/
@@ -112,21 +113,55 @@ Versão testada: Python 3.13.5. Bibliotecas:
 
 ### 3.2 Comandos (sempre a partir da raiz do repositório)
 
+**O caminho normal é um comando só:**
+
 ```bash
-python -m ingestao.ONS.ingestao_ons                     # últimos 3 meses
+python -m ingestao                                 # ONS, ANEEL, locais.csv, NASA
+python -m ingestao --inicio 2026-01 --fim 2026-08  # período repassado a ONS e NASA
+python -m ingestao --fontes ons                    # só uma etapa
+python -m ingestao --listar                        # mostra o plano e sai
+python -m ingestao --seguir                        # não para na primeira falha
+```
+
+Os scripts continuam executáveis individualmente, para depurar uma fonte ou usar uma opção específica:
+
+```bash
 python -m ingestao.ONS.ingestao_ons --inicio 2026-01 --fim 2026-08
 
-python -m ingestao.aneel.ingestao_aneel                 # UFV + EOL
 python -m ingestao.aneel.ingestao_aneel --tipos UFV EOL UHE PCH
 python -m ingestao.aneel.ingestao_aneel --listar-retratos    # só lista o histórico
 python -m ingestao.aneel.ingestao_aneel --mudancas-de-fase   # compara os 2 últimos retratos
 
 python -m ingestao.nasa_power.gerar_locais              # locais.csv a partir da ANEEL
 python -m ingestao.nasa_power.ingestao_nasa_power       # mesmo período do ONS
-python -m ingestao.nasa_power.ingestao_nasa_power --inicio 2026-01 --fim 2026-08
 ```
 
-**A ordem entre ANEEL e NASA importa:** os pontos consultados na NASA POWER são derivados das coordenadas das usinas da ANEEL ([§7.3](#73-escolha-dos-locais--locaiscsv)), então a ANEEL vem primeiro, depois `gerar_locais`, depois a NASA. É essa a ordem da lista `INGESTOES` do `ETL.pipeline`, usada por `python -m ETL.pipeline --ingerir`.
+### 3.2.1 O orquestrador — `ingestao/__main__.py`
+
+Eram três comandos em sequência, com uma dependência não óbvia entre eles, e nada impedia rodar na ordem errada ou esquecer uma fonte. O `python -m ingestao` resolve os dois.
+
+**A ordem não é arbitrária:** `gerar_locais` lê o cadastro da ANEEL para montar o `locais.csv`, e a ingestão da NASA consulta exatamente as coordenadas desse arquivo ([§7.3](#73-escolha-dos-locais--locaiscsv)). Rodar a NASA antes da ANEEL usaria os pontos da coleta anterior — sem erro nenhum, só dado desatualizado, que é o pior tipo de falha. Por isso `--fontes nasa ons` executa **ons e depois nasa**: a ordem é a da lista `ETAPAS`, não a que foi digitada.
+
+| Etapa | Módulo | Aceita período |
+|---|---|---|
+| `ons` | `ingestao.ONS.ingestao_ons` | sim |
+| `aneel` | `ingestao.aneel.ingestao_aneel` | não (é um retrato do cadastro) |
+| `locais` | `ingestao.nasa_power.gerar_locais` | não |
+| `nasa` | `ingestao.nasa_power.ingestao_nasa_power` | sim |
+
+**Cada etapa roda como subprocesso** (`python -m <modulo>`), não por importação. Assim cada script mantém o próprio `argparse`, o próprio logging e o próprio `.env`, e uma falha não deixa estado pela metade no processo das outras. O custo é um interpretador por etapa, irrelevante perto do tempo de rede.
+
+**Falha interrompe por padrão.** Continuar com a ANEEL quebrada só produziria um `locais.csv` desatualizado e um clima dos pontos antigos. O `--seguir` inverte isso quando se quer aproveitar o que der certo. Em qualquer caso, sai um resumo e o código de saída é 1 se alguma etapa não terminou em `ok`:
+
+```
+[ingestao] resumo:
+  ok      ons        41.2 s
+  FALHOU  aneel       3.1 s
+  pulada  locais            -
+  pulada  nasa              -
+```
+
+`python -m ETL.pipeline --ingerir` agora chama este orquestrador em vez de manter a própria lista de módulos: a ordem das fontes passou a ter **uma única definição**, aqui.
 
 ### 3.3 Variáveis de ambiente (`.env`)
 
@@ -742,8 +777,8 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 ## 11. Testes automatizados
 
 ```bash
-pytest ingestao/tests -q        # 82 testes, ~5 s
-pytest -q                       # com os 24 do backend: 106
+pytest ingestao/tests -q        # 93 testes, ~5 s
+pytest -q                       # com os 24 do backend: 117
 ```
 
 **Nenhum teste toca a rede.** Todas as respostas HTTP são simuladas com [`responses`](https://github.com/getsentry/responses), que intercepta o `requests` na camada do adaptador: a sessão, os cabeçalhos, os parâmetros e o código de status são os reais, só o socket não existe. Isso permite testar coisas que a rede não oferece sob demanda — um `429`, um mês que ainda não foi publicado, o recurso da ANEEL mudando no meio da paginação.
@@ -757,6 +792,7 @@ O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de ret
 | `test_nasa_power.py` | `_janelas_anuais`, `_baixar_local` | 12 |
 | `test_aneel.py` | paginação e retratos datados | 14 |
 | `test_gerar_locais.py` | seleção dos pontos de clima a partir do cadastro | 18 |
+| `test_orquestrador.py` | ordem das etapas, repasse de período e comportamento em falha | 11 |
 
 ### 11.1 O que cada grupo protege
 
@@ -771,6 +807,8 @@ O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de ret
 **`baixar` do ONS** — que cada mês vira um arquivo, que um mês `404` é pulado sem derrubar os outros, que a URL do CKAN tem precedência sobre o padrão do S3, que `arquivo_origem` guarda o nome **na fonte** e que reingerir um mês não apaga os demais (a garantia da ingestão incremental).
 
 **Retratos da ANEEL** ([§8.5](#85-retratos-datados--historico_aneel)) — que a data vem do dado e não do relógio, que arquivar duas vezes não regrava (comparando o `mtime` em nanossegundos), que `retratos()` ignora arquivos estranhos na pasta e que `mudancas_de_fase` detecta tanto a transição `Construção → Operação` quanto a usina que entrou no cadastro.
+
+**Orquestrador** ([§3.2.1](#321-o-orquestrador--ingestaomainpy)) — `subprocess.run` é substituído por um dublê que registra o comando pedido, então os testes verificam a ordem, o repasse de `--inicio`/`--fim` só para quem aceita período, a parada na primeira falha (com as seguintes marcadas `pulada`) e o `--seguir`. Nenhum processo é criado.
 
 **`gerar_locais`** ([§7.3](#73-escolha-dos-locais--locaiscsv)) — o formato numérico brasileiro (`"11.832,10"` → `11.8321` MW), os descartes (potência baixa, fase, coordenada fora do Brasil, outra fonte), o caso real das "Fótons de São George" (UF de MS com coordenada no Piauí) e o **determinismo** com potências empatadas: o teste gera o CSV cinco vezes e exige o mesmo ponto.
 
@@ -792,8 +830,8 @@ O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de ret
 | 4 | ~~Coordenadas de `locais.csv` manuais e aproximadas~~ **Resolvido:** geradas da ANEEL por `gerar_locais.py`; a capacidade com clima a ≤ 300 km subiu de 77,3% para 96,5% ([§7.3](#73-escolha-dos-locais--locaiscsv)) | Resta: um ponto por (fonte, UF) é regional, não por usina | Subir `--por-grupo`, ou consultar a NASA por usina nas maiores (custo linear em chamadas) |
 | 5 | ~~NASA: vento/temperatura atrasam ~2 dias; irradiância horária ~3 meses, diária ~1 semana~~ | Janela recente sem parte das variáveis **Tratado:** o valor `-999` vira nulo com flag `faltante`, a coluna `medidas_faltantes` diz **quais** variáveis faltaram (as latências são diferentes por variável) e a `fato_clima` usa a série diária. A API expõe as duas colunas e o frontend escreve a ressalva na tela. Para análises horárias de irradiância, usar períodos com mais de 3 meses |
 | 6 | ~~ANEEL é um retrato único, sobrescrito~~ **Resolvido:** cada execução arquiva `historico_aneel/dados_aneel_bruto_AAAA-MM-DD.parquet`, com data lida de `DatGeracaoConjuntoDados`, e `--mudancas-de-fase` compara dois retratos ([§8.5](#85-retratos-datados--historico_aneel)) | Resta: só há um retrato arquivado, então ainda não há série histórica para a análise de sobrevivência usar | Rodar a ingestão periodicamente (o valor aparece com o tempo) |
-| 7 | ~~Sem testes automatizados~~ **Resolvido:** 82 testes em `ingestao/tests` com `pytest` + `responses`, sem rede ([§11](#11-testes-automatizados)) | Resta: mudança de contrato nas APIs públicas não é detectada | Um teste de integração com rede, rodado à parte e tolerante a indisponibilidade |
-| 8 | Três comandos separados | Fácil esquecer uma fonte | Um orquestrador `python -m ingestao` que rode as três fontes em sequência |
+| 7 | ~~Sem testes automatizados~~ **Resolvido:** 93 testes em `ingestao/tests` com `pytest` + `responses`, sem rede ([§11](#11-testes-automatizados)) | Resta: mudança de contrato nas APIs públicas não é detectada | Um teste de integração com rede, rodado à parte e tolerante a indisponibilidade |
+| 8 | ~~Três comandos separados~~ **Resolvido:** `python -m ingestao` roda as etapas na ordem canônica, com `--fontes`, `--listar`, `--seguir` e resumo final ([§3.2.1](#321-o-orquestrador--ingestaomainpy)) | — | — |
 
 ---
 

@@ -6,7 +6,7 @@
 
 Uso (a partir da raiz do repositório):
     python -m ETL.pipeline                        # raw + clean + curated com o que já foi ingerido
-    python -m ETL.pipeline --ingerir              # baixa tudo de novo antes (ONS, NASA, ANEEL)
+    python -m ETL.pipeline --ingerir              # roda `python -m ingestao` antes (ONS, ANEEL, NASA)
     python -m ETL.pipeline --ingerir --simular    # ... e regenera os eventos simulados
     python -m ETL.pipeline --etapas clean curated # pula a etapa raw
     python -m ETL.pipeline --data-coleta 2026-09-18  # usa uma partição raw específica
@@ -35,10 +35,9 @@ from ETL.utils import gravar
 
 log = logging.getLogger("ETL.pipeline")
 
-# Ordem obrigatória: a ANEEL vem antes de `gerar_locais`, que produz o `locais.csv`
-# com as coordenadas consultadas na NASA POWER.
-INGESTOES = ["ingestao.ONS.ingestao_ons", "ingestao.aneel.ingestao_aneel",
-             "ingestao.nasa_power.gerar_locais", "ingestao.nasa_power.ingestao_nasa_power"]
+# A ordem das fontes (e a dependência ANEEL -> locais.csv -> NASA) mora no
+# orquestrador da ingestão, não aqui: `python -m ingestao` é a única definição.
+ORQUESTRADOR_INGESTAO = "ingestao"
 SIMULACAO = "ML.analise_sobrevivencia.dados_simulados"
 ETAPAS = ("raw", "clean", "curated")
 
@@ -96,8 +95,7 @@ def main() -> None:
 
     inicio = time.perf_counter()
     if args.ingerir:
-        for modulo in INGESTOES:
-            _rodar_modulo(modulo)
+        _rodar_modulo(ORQUESTRADOR_INGESTAO)
     if args.simular:
         _rodar_modulo(SIMULACAO)
 

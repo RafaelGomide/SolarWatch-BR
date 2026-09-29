@@ -96,7 +96,7 @@ Sempre a partir da raiz do repositório, com o ambiente de `requirements.txt` in
 
 ```bash
 python -m ETL.pipeline                           # raw + clean + curated com o que já foi ingerido (~75 s)
-python -m ETL.pipeline --ingerir                 # baixa ONS, NASA e ANEEL de novo antes (~3 min)
+python -m ETL.pipeline --ingerir                 # roda `python -m ingestao` antes (~3 min)
 python -m ETL.pipeline --ingerir --simular       # ... e regenera os eventos simulados
 python -m ETL.pipeline --etapas clean curated    # pula a etapa raw
 python -m ETL.pipeline --etapas curated          # só remonta o modelo estrela a partir do clean (~20 s)
@@ -105,7 +105,7 @@ python -m ETL.pipeline --data-coleta 2026-09-18  # reprocessa uma coleta especí
 
 | Argumento | Efeito |
 |---|---|
-| `--ingerir` | Roda, via `subprocess` e nesta ordem, `ingestao.ONS.ingestao_ons`, `ingestao.nasa_power.ingestao_nasa_power` e `ingestao.aneel.ingestao_aneel`. Cada ingestão usa seu próprio período (`.env` / padrões) |
+| `--ingerir` | Chama `python -m ingestao`, o orquestrador da ingestão, que roda as fontes na ordem canônica (ONS → ANEEL → `locais.csv` → NASA) e aborta na primeira falha. A ordem tem uma definição só, lá; a pipeline não mantém cópia dela. Cada ingestão usa seu próprio período (`.env` / padrões) |
 | `--simular` | Roda `ML.analise_sobrevivencia.dados_simulados` (semente padrão 42) |
 | `--etapas` | Subconjunto de `raw clean curated` (padrão: as três) |
 | `--data-coleta AAAA-MM-DD` | Clean lê essa partição raw em vez da mais recente |
