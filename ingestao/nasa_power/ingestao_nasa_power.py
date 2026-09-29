@@ -1,7 +1,8 @@
 """Ingestão da NASA POWER API — clima horário e diário por coordenada.
 
-Para cada local de `locais.csv` (polos de geração solar/eólica, com estado e
-subsistema para cruzar com os dados do ONS), baixa duas séries:
+Para cada local de `locais.csv` — pontos derivados das coordenadas reais das
+usinas da ANEEL por `gerar_locais.py`, com estado e subsistema para cruzar com
+os dados do ONS — baixa duas séries:
 
 1. HORÁRIA (`dados/bruto/dados_nasa_bruto.parquet`), em UTC:
    - ALLSKY_SFC_SW_DWN: irradiância global horizontal na superfície (Wh/m²)
@@ -16,7 +17,8 @@ com poucos dias de atraso. Vento e temperatura horários atrasam só ~2 dias.
 
 Tudo é gravado sem transformação. Valores ausentes vêm como -999 (fill value da API).
 
-Uso:
+Uso (o `locais.csv` precisa existir; gere-o depois da ingestão da ANEEL com
+`python -m ingestao.nasa_power.gerar_locais`):
     python -m ingestao.nasa_power.ingestao_nasa_power --inicio 2026-06 --fim 2026-08
 
 Sem argumentos, lê NASA_MES_INICIO / NASA_MES_FIM do `.env` (ou, na ausência,

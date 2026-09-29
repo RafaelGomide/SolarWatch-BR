@@ -35,8 +35,10 @@ from ETL.utils import gravar
 
 log = logging.getLogger("ETL.pipeline")
 
-INGESTOES = ["ingestao.ONS.ingestao_ons", "ingestao.nasa_power.ingestao_nasa_power",
-             "ingestao.aneel.ingestao_aneel"]
+# Ordem obrigatória: a ANEEL vem antes de `gerar_locais`, que produz o `locais.csv`
+# com as coordenadas consultadas na NASA POWER.
+INGESTOES = ["ingestao.ONS.ingestao_ons", "ingestao.aneel.ingestao_aneel",
+             "ingestao.nasa_power.gerar_locais", "ingestao.nasa_power.ingestao_nasa_power"]
 SIMULACAO = "ML.analise_sobrevivencia.dados_simulados"
 ETAPAS = ("raw", "clean", "curated")
 

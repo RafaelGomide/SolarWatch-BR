@@ -1,11 +1,20 @@
-local,municipio,id_estado,id_subsistema,fonte_predominante,latitude,longitude
-pirapora_mg,Pirapora,MG,SE,solar,-17.35,-44.94
-janauba_mg,Janaúba,MG,SE,solar,-15.80,-43.31
-bom_jesus_da_lapa_ba,Bom Jesus da Lapa,BA,NE,solar,-13.25,-43.42
-sao_goncalo_do_gurgueia_pi,São Gonçalo do Gurguéia,PI,NE,solar,-10.03,-45.31
-ribeira_do_piaui_pi,Ribeira do Piauí,PI,NE,solar,-7.69,-42.71
-joao_camara_rn,João Câmara,RN,NE,eolica,-5.54,-35.82
-trairi_ce,Trairi,CE,NE,eolica,-3.28,-39.27
-parnaiba_pi,Parnaíba,PI,NE,eolica,-2.90,-41.78
-caetite_ba,Caetité,BA,NE,eolica,-14.07,-42.48
-osorio_rs,Osório,RS,S,eolica,-29.89,-50.27
+local,municipio,id_estado,id_subsistema,fonte_predominante,latitude,longitude,usina_referencia,potencia_mw,ceg
+uibai_ba,Uibaí,BA,NE,eolica,-11.43252,-42.13743,Serra da Mangabeira,79.8,EOL.CV.BA.044878-8.1
+guamare_rn,Guamaré,RN,NE,eolica,-5.12431,-36.38331,Alegria II,100.65,EOL.CV.RN.028443-2.1
+montes_claros_mg,Montes Claros,MG,SE,solar,-16.72709,-44.05635,Advogado Eduardo Soares (Antiga Boa Esperança),85.0,UFV.RS.MG.043221-0.1
+lagoa_do_barro_do_piaui_pi,Lagoa do Barro do Piauí,PI,NE,eolica,-8.63504,-41.60169,Aura Queimada Nova 02,50.6,EOL.CV.PI.040567-1.1
+oliveira_dos_brejinhos_ba,Oliveira dos Brejinhos,BA,NE,solar,-12.31885,-42.62379,Sol do Sertão VIII,95.245,UFV.RS.BA.032066-8.1
+camocim_ce,Camocim,CE,NE,eolica,-2.9051,-41.03925,Praia Formosa,105.0,EOL.CV.CE.028631-1.1
+ribeiro_goncalves_pi,Ribeiro Gonçalves,PI,NE,solar,-7.63015,-45.2181,Panorama 01,100.0,UFV.RS.PI.049401-1.2
+sao_goncalo_do_amarante_ce,São Gonçalo do Amarante,CE,NE,solar,-3.63746,-38.92866,Lins 02,92.0,UFV.RS.CE.049927-7.2
+serra_do_mel_rn,Serra do Mel,RN,NE,solar,-5.12156,-37.03031,Serra do Mel I,137.48,UFV.RS.RN.037811-9.1
+santana_do_livramento_rs,Santana do Livramento,RS,S,eolica,-31.07522,-55.88633,Coxilha Negra 3,105.0,EOL.CV.RS.032237-7.1
+sao_jose_do_belmonte_pe,São José do Belmonte,PE,NE,solar,-7.85586,-38.82782,Belmonte 1-1,50.0,UFV.RS.PE.040725-9.1
+araripina_pe,Araripina,PE,NE,eolica,-8.00367,-40.51768,Ventos de Santo Antero,49.5,EOL.CV.PE.035249-7.1
+castilho_sp,Castilho,SP,SE,solar,-20.80001,-51.52874,Castilho 1,49.999,UFV.RS.SP.034108-8.1
+coronel_ezequiel_pb,Coronel Ezequiel,PB,NE,eolica,-6.03733,-36.13238,Ventos de São Rafael 11,63.0,EOL.CV.PB.050017-8.1
+santa_luzia_pb,Santa Luzia,PB,NE,solar,-6.83192,-36.92888,Luzia 2,58.932,UFV.RS.PB.044469-3.1
+paranaiba_ms,Paranaíba,MS,SE,solar,-19.75401,-51.398,Seriemas 1,50.0,UFV.RS.MS.052257-0.1
+paulino_neves_ma,Paulino Neves,MA,N,eolica,-2.69809,-42.58917,Delta 7 II,35.1,EOL.CV.MA.040573-6.1
+vila_propicio_go,Vila Propício,GO,SE,solar,-14.98256,-48.89201,Barro Alto I,50.0,UFV.RS.GO.052318-6.1
+bom_jardim_da_serra_sc,Bom Jardim da Serra,SC,S,eolica,-28.471,-49.60503,Púlpito,30.0,EOL.CV.SC.029051-3.1

@@ -45,6 +45,8 @@ O objetivo analítico é cruzar **o que foi gerado** (ONS) com **as condições 
 
 A camada bruta começou em CSV e foi migrada para Parquet. Veja a [§4.5](#45-formato-de-saída-parquet).
 
+Os números da NASA são dos 10 locais da versão manual do `locais.csv`. A geração automática a partir da ANEEL ([§7.3](#73-escolha-dos-locais--locaiscsv)) passou para **19 pontos**, então a próxima coleta tem cerca de 1,9x essas linhas — na casa de 36 mil na série horária, o que continua irrelevante em disco.
+
 ---
 
 ## 2. Estrutura de arquivos
@@ -64,7 +66,8 @@ SolarWatch-BR/
 │   ├── nasa_power/
 │   │   ├── __init__.py
 │   │   ├── ingestao_nasa_power.py
-│   │   └── locais.csv          # coordenadas consultadas na NASA POWER
+│   │   ├── gerar_locais.py     # gera locais.csv a partir do cadastro da ANEEL
+│   │   └── locais.csv          # coordenadas consultadas na NASA POWER (gerado)
 │   └── aneel/
 │       ├── __init__.py
 │       └── ingestao_aneel.py
@@ -110,12 +113,15 @@ Versão testada: Python 3.13.5. Bibliotecas:
 python -m ingestao.ONS.ingestao_ons                     # últimos 3 meses
 python -m ingestao.ONS.ingestao_ons --inicio 2026-01 --fim 2026-08
 
-python -m ingestao.nasa_power.ingestao_nasa_power       # mesmo período do ONS
-python -m ingestao.nasa_power.ingestao_nasa_power --inicio 2026-01 --fim 2026-08
-
 python -m ingestao.aneel.ingestao_aneel                 # UFV + EOL
 python -m ingestao.aneel.ingestao_aneel --tipos UFV EOL UHE PCH
+
+python -m ingestao.nasa_power.gerar_locais              # locais.csv a partir da ANEEL
+python -m ingestao.nasa_power.ingestao_nasa_power       # mesmo período do ONS
+python -m ingestao.nasa_power.ingestao_nasa_power --inicio 2026-01 --fim 2026-08
 ```
+
+**A ordem entre ANEEL e NASA importa:** os pontos consultados na NASA POWER são derivados das coordenadas das usinas da ANEEL ([§7.3](#73-escolha-dos-locais--locaiscsv)), então a ANEEL vem primeiro, depois `gerar_locais`, depois a NASA. É essa a ordem da lista `INGESTOES` do `ETL.pipeline`, usada por `python -m ETL.pipeline --ingerir`.
 
 ### 3.3 Variáveis de ambiente (`.env`)
 
@@ -387,26 +393,46 @@ Parâmetros fixos da requisição:
 
 ### 7.3 Escolha dos locais — `locais.csv`
 
-A NASA POWER trabalha por **coordenada**, mas os dados do ONS não trazem coordenadas. Os locais foram escolhidos como **polos reais de geração**, cada um marcado com UF e subsistema, que são as chaves de ligação com o ONS:
+A NASA POWER trabalha por **coordenada**, mas os dados do ONS não trazem coordenadas. O `locais.csv` é a ponte, e ele é **gerado** por `gerar_locais.py` a partir das coordenadas reais dos empreendimentos do SIGA — não mais escrito à mão.
 
-| local | UF | Subsistema | Fonte predominante |
-|---|---|---|---|
-| pirapora_mg | MG | SE | solar |
-| janauba_mg | MG | SE | solar |
-| bom_jesus_da_lapa_ba | BA | NE | solar |
-| sao_goncalo_do_gurgueia_pi | PI | NE | solar |
-| ribeira_do_piaui_pi | PI | NE | solar |
-| joao_camara_rn | RN | NE | eólica |
-| trairi_ce | CE | NE | eólica |
-| parnaiba_pi | PI | NE | eólica |
-| caetite_ba | BA | NE | eólica |
-| osorio_rs | RS | S | eólica |
+**Como era:** 10 pontos digitados manualmente, com a coordenada aproximada da *sede do município* (2 casas decimais), escolhidos por conhecimento de mercado ("Caetité é polo eólico"). Funcionava, mas era um número escolhido por uma pessoa, sem critério verificável e sem relação com onde os parques realmente estão — a sede de Caetité fica a dezenas de quilômetros dos aerogeradores.
 
-Colunas do arquivo: `local, municipio, id_estado, id_subsistema, fonte_predominante, latitude, longitude`.
+**Como é:** para cada par (fonte, UF) com capacidade relevante, o script pega a **maior usina em operação** e usa a coordenada dela, com 5 casas decimais, como ponto de clima daquela região. A escolha é reproduzível a partir do bruto da ANEEL e vem com procedência: o CSV guarda `usina_referencia`, `potencia_mw` e `ceg` do empreendimento que originou cada ponto.
 
-- As coordenadas são **aproximadas** (centro do município, 2 casas decimais) e foram definidas manualmente. Vale revisá-las, idealmente substituindo-as pelas coordenadas dos empreendimentos do cadastro da ANEEL ([§9](#9-como-as-três-fontes-se-cruzam)).
-- Para incluir ou trocar locais, basta editar o CSV. O código não tem nenhum local fixo.
-- `fonte_predominante` é só documentação e não é copiada para a saída.
+Filtros, na ordem (todos com flag de CLI):
+
+| Filtro | Padrão | Por quê |
+|---|---|---|
+| fase = "Operação", fonte UFV/EOL | — | usina em construção não tem geração para cruzar |
+| coordenada dentro do Brasil | `LIMITES_BRASIL` | descarta coordenada zerada ou com sinal trocado |
+| potência da usina | `--mw-minimo 1` | o SIGA tem milhares de registros minúsculos (o Pará aparece com 13.105 UFV somando 17 MW) |
+| coordenada coerente com a UF | `--max-km-uf 700` | ver o caso abaixo |
+| capacidade do par (fonte, UF) | `--mw-minimo-grupo 50` | não gastar chamada de API em UF sem geração relevante |
+| distância entre pontos | `--min-km 50` | dois pontos vizinhos pedem a mesma série climática duas vezes |
+| pontos por par (fonte, UF) | `--por-grupo 1` | ver o ganho marginal abaixo |
+| desempate | potência, depois CEG | dezenas de usinas têm potência idêntica (Castilho 1 a 5, todas 49,999 MW); sem o CEG a escolha oscilaria entre execuções |
+
+**Registro com UF e coordenada de estados diferentes.** As cinco unidades "Fótons de São George" estão cadastradas em **MS** com coordenada no **Piauí** — 2.094 km da mediana das usinas de MS. Como são as maiores "usinas de MS" do cadastro, elas seriam escolhidas como ponto de clima do Mato Grosso do Sul, e todas as usinas do estado passariam a receber o clima do sertão nordestino. O filtro `--max-km-uf` compara cada usina com a **mediana** das coordenadas da própria UF (robusta a alguns pontos errados) e descarta as incoerentes — 9 usinas no retrato de 18/09/2026, todas com troca real de estado. O limite é folgado de propósito: nenhum estado brasileiro tem 700 km da mediana à borda, então o filtro pega troca de UF, não usina legitimamente distante (as eólicas do litoral do Piauí, a 578 km da mediana do estado, continuam valendo).
+
+**Resultado — 19 pontos** (retrato de 18/09/2026), contra os 10 manuais:
+
+| | Manual (10 pontos) | Gerado da ANEEL (19 pontos) |
+|---|---|---|
+| Distância usina → ponto mais próximo (mediana) | 178 km | **93 km** |
+| Idem, p90 | 411 km | **270 km** |
+| Capacidade instalada a ≤ 300 km de um ponto | 77,3% | **96,5%** |
+
+Os 300 km são o limiar `DISTANCIA_MAXIMA_CLIMA_KM` do ETL, acima do qual o vínculo usina→clima é marcado como `mais_proximo_distante`. Ou seja: a fração de capacidade com clima de qualidade aceitável saiu de três quartos para quase tudo.
+
+Com `--por-grupo 2` seriam 37 pontos, mediana de 55 km e 97,8% de cobertura: o dobro de chamadas de API por 1,3 ponto percentual. Por isso o padrão é 1 por grupo.
+
+O que sobra fora de alcance são usinas isoladas de 1 a 5 MW em RR e RO (76,7 MW somados, a 1.400–2.200 km do ponto mais próximo). Esses estados não alcançam os 50 MW de grupo e não ganham ponto próprio — em troca, nenhuma requisição é gasta por 1 MW de capacidade. O ETL marca essas usinas como `mais_proximo_distante` e a API devolve a distância em cada resposta de clima.
+
+Colunas do arquivo: `local, municipio, id_estado, id_subsistema, fonte_predominante, latitude, longitude, usina_referencia, potencia_mw, ceg`. A ingestão copia apenas as seis primeiras para a saída (`COLUNAS_LOCAL`); as três últimas existem para auditoria do CSV.
+
+- `local` é o slug `municipio_uf` (`uibai_ba`), com sufixo da fonte quando dois pontos caem no mesmo município.
+- Editar o CSV à mão continua funcionando — o código não tem nenhum local fixo —, mas a próxima execução de `gerar_locais` sobrescreve.
+- **Trocar o `locais.csv` invalida o clima já ingerido:** os pontos antigos não existem na nova coleta. Rode de novo a ingestão da NASA, e depois o ETL, para o `fato_clima` refletir os pontos novos.
 
 ### 7.4 Fluxo de execução
 
@@ -454,11 +480,11 @@ Em seguida, `df.assign(**{coluna: local[coluna] ...})` acrescenta a identificaç
 
 | Coluna | Exemplo | Descrição |
 |---|---|---|
-| `local` | `pirapora_mg` | Identificador do ponto (de `locais.csv`) |
-| `municipio` | `Pirapora` | |
-| `id_estado` | `MG` | Mesma codificação de `id_estado` do ONS |
-| `id_subsistema` | `SE` | Mesma codificação de `id_subsistema` do ONS |
-| `latitude`, `longitude` | `-17.35`, `-44.94` | Coordenada consultada |
+| `local` | `uibai_ba` | Identificador do ponto (de `locais.csv`) |
+| `municipio` | `Uibaí` | |
+| `id_estado` | `BA` | Mesma codificação de `id_estado` do ONS |
+| `id_subsistema` | `NE` | Mesma codificação de `id_subsistema` do ONS |
+| `latitude`, `longitude` | `-11.43252`, `-42.13743` | Coordenada consultada (a da usina de referência) |
 | `data_hora_utc` | `2026070100` | `AAAAMMDDHH` em **UTC**, string crua da API |
 | `ALLSKY_SFC_SW_DWN` | `0.0` | Wh/m² |
 | `WS10M` | `3.82` | m/s |
@@ -613,7 +639,7 @@ Verificadas nos dados reais da última execução:
 | ONS ↔ NASA | `id_estado` / `id_subsistema` + tempo | Boa, desde que o fuso seja alinhado (ONS em horário de Brasília, NASA em UTC: `hora_brasilia = data_hora_utc − 3 h`) |
 | ONS ↔ ANEEL | `ceg` (ONS) ↔ `CodCEG` (ANEEL) | **Precisa, porém rara** (ver abaixo) |
 | ONS ↔ ANEEL | `id_estado` ↔ `SigUFPrincipal` + tipo de fonte | Agregada, mas cobre tudo |
-| ANEEL ↔ NASA | coordenadas da ANEEL → novas linhas em `locais.csv` | Permite clima **por usina** |
+| ANEEL ↔ NASA | coordenadas da ANEEL → `locais.csv` (por `gerar_locais.py`) | **Em uso:** os pontos de clima são coordenadas de usinas reais ([§7.3](#73-escolha-dos-locais--locaiscsv)) |
 
 ### 9.2 O formato do CEG diverge entre as fontes
 
@@ -677,7 +703,7 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 
 - User-Agent identificável ([§5.2](#52-nova_sessao)).
 - Pausas de cortesia entre chamadas e *backoff* exponencial em 429/5xx, que reduzem a carga sobre o serviço quando ele já está degradado.
-- Volume por execução pequeno para NASA (10 chamadas) e ANEEL (5 chamadas). No ONS são 3 downloads de arquivos estáticos em S3.
+- Volume por execução pequeno para NASA (38 chamadas: 19 pontos x 2 séries, com 1 s de pausa entre elas) e ANEEL (5 chamadas). No ONS são 3 downloads de arquivos estáticos em S3.
 
 ---
 
@@ -688,7 +714,7 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 | 1 | ~~Meses do ONS concatenados em memória~~ **Resolvido:** um Parquet por mês em `dados/bruto/dados_ons_bruto/`, lido por glob ([§6.2.1](#621-um-parquet-por-mês)) | — | — |
 | 2 | ~~Bruto em CSV~~ **Resolvido:** migrado para Parquet ([§4.5](#45-formato-de-saída-parquet)) | — | — |
 | 3 | ~~`get_com_retry` repete erros `4xx` não-429~~ **Resolvido:** `4xx` (exceto 429) levanta na primeira tentativa ([§5.1](#51-get_com_retrysessao-url-kwargs)) | — | — |
-| 4 | Coordenadas de `locais.csv` definidas manualmente e aproximadas | Clima representativo do município, não da usina | Gerar `locais.csv` a partir das coordenadas da ANEEL (maiores usinas por UF) |
+| 4 | ~~Coordenadas de `locais.csv` manuais e aproximadas~~ **Resolvido:** geradas da ANEEL por `gerar_locais.py`; a capacidade com clima a ≤ 300 km subiu de 77,3% para 96,5% ([§7.3](#73-escolha-dos-locais--locaiscsv)) | Resta: um ponto por (fonte, UF) é regional, não por usina | Subir `--por-grupo`, ou consultar a NASA por usina nas maiores (custo linear em chamadas) |
 | 5 | NASA: vento/temperatura atrasam ~2 dias; irradiância horária ~3 meses, diária ~1 semana | Janela recente sem clima | ETL trata como nulo com flag `faltante`; a `fato_clima` usa a série diária. Para análises horárias de irradiância, usar períodos com mais de 3 meses |
 | 6 | ANEEL é um retrato único, sobrescrito a cada execução | Perde-se o histórico de mudanças de fase (construção → operação) | Se a análise de sobrevivência precisar, arquivar retratos datados (`dados_aneel_bruto_AAAA-MM-DD.parquet`) |
 | 7 | Sem testes automatizados | Regressões silenciosas (como o bug da regex do ONS) | Testes unitários de `_meses`, `_janelas_anuais`, `PADRAO_MENSAL` e paginação da ANEEL com respostas simuladas (`pytest` + `responses`), conforme §13 do system design |
