@@ -28,7 +28,7 @@
 |---|---|---|---|---|
 | **ONS** — Operador Nacional do Sistema Elétrico | Geração verificada (MWmed) por usina/conjunto, com subsistema, estado e tipo de fonte (hidráulica, térmica, eólica, fotovoltaica, nuclear) | usina × hora | API CKAN do portal (descoberta) + Parquets mensais no S3 | `dados/bruto/dados_ons_bruto/` (um Parquet por mês) |
 | **NASA POWER** | Irradiância solar, vento a 10 m e 50 m, temperatura a 2 m | coordenada × hora (UTC) **e** coordenada × dia (LST) | API REST `temporal/hourly/point` e `temporal/daily/point` | `dados/bruto/dados_nasa_bruto.parquet` + `dados/bruto/dados_nasa_diario_bruto.parquet` |
-| **ANEEL — SIGA** | Cadastro de empreendimentos solares (UFV) e eólicos (EOL): nome, CEG, potência, município, fase, data de entrada em operação, coordenadas | empreendimento | API CKAN `datastore_search` (paginada) | `dados/bruto/dados_aneel_bruto.parquet` |
+| **ANEEL — SIGA** | Cadastro de empreendimentos solares (UFV) e eólicos (EOL): nome, CEG, potência, município, fase, data de entrada em operação, coordenadas | empreendimento | API CKAN `datastore_search` (paginada) | `dados/bruto/dados_aneel_bruto.parquet` + retrato datado em `historico_aneel/` |
 
 As três fontes são **públicas, gratuitas e sem autenticação**, o que é consistente com a restrição de orçamento zero do projeto (§14 do system design).
 
@@ -41,7 +41,7 @@ O objetivo analítico é cruzar **o que foi gerado** (ONS) com **as condições 
 | `dados_ons_bruto/` (3 arquivos mensais) | 1.365.096 | ~10,4 MB | ~214 MB | 01/07/2026 00h → 17/09/2026 23h |
 | `dados_nasa_bruto.parquet` | 19.200 | ~0,1 MB | ~1,5 MB | 01/07/2026 00h → 18/09/2026 23h (UTC), 10 locais |
 | `dados_nasa_diario_bruto.parquet` | 800 | <0,1 MB | — | 01/07/2026 → 18/09/2026 (dias LST), 10 locais |
-| `dados_aneel_bruto.parquet` | 20.511 | ~0,8 MB | ~6 MB | retrato do cadastro em 18/09/2026 |
+| `dados_aneel_bruto.parquet` | 20.511 | ~0,8 MB | ~6 MB | retrato do cadastro em 18/09/2026 (arquivado também em `historico_aneel/dados_aneel_bruto_2026-09-18.parquet`) |
 
 A camada bruta começou em CSV e foi migrada para Parquet. Veja a [§4.5](#45-formato-de-saída-parquet).
 
@@ -79,7 +79,9 @@ SolarWatch-BR/
 │       │   └── dados_ons_bruto_2026_09.parquet
 │       ├── dados_nasa_bruto.parquet
 │       ├── dados_nasa_diario_bruto.parquet
-│       └── dados_aneel_bruto.parquet
+│       ├── dados_aneel_bruto.parquet    # retrato corrente (lido pelo ETL)
+│       └── historico_aneel/             # retratos datados, um por publicação
+│           └── dados_aneel_bruto_2026-09-18.parquet
 └── docs/ingestao/
     └── doc_tecnica_ingestao.md    # este documento
 ```
@@ -115,6 +117,8 @@ python -m ingestao.ONS.ingestao_ons --inicio 2026-01 --fim 2026-08
 
 python -m ingestao.aneel.ingestao_aneel                 # UFV + EOL
 python -m ingestao.aneel.ingestao_aneel --tipos UFV EOL UHE PCH
+python -m ingestao.aneel.ingestao_aneel --listar-retratos    # só lista o histórico
+python -m ingestao.aneel.ingestao_aneel --mudancas-de-fase   # compara os 2 últimos retratos
 
 python -m ingestao.nasa_power.gerar_locais              # locais.csv a partir da ANEEL
 python -m ingestao.nasa_power.ingestao_nasa_power       # mesmo período do ONS
@@ -609,7 +613,34 @@ A ordem das colunas vem de `result.fields`, e não das chaves do primeiro regist
 | `DscSubBacia` | | Sub-bacia (relevante para hídricas) |
 | **`DscMuninicpios`** | `Nova Lima - MG` | **Município(s)**. O nome da coluna tem um erro de digitação na própria fonte, preservado |
 
-### 8.5 Perfil da última execução
+### 8.5 Retratos datados — `historico_aneel/`
+
+O recurso da ANEEL é **republicado diariamente e sobrescrito**: não existe versão anterior no portal. Como a ingestão também sobrescrevia o `dados_aneel_bruto.parquet`, cada coleta apagava a anterior e o histórico se perdia — inclusive a informação mais valiosa que esta fonte tem para o projeto: **quando uma usina muda de fase**.
+
+Isso importa porque a fase (`Construção não iniciada` → `Construção` → `Operação`) é um **evento observado com data**, diferente do `DatEntradaOperacao`, que é um campo cadastral podendo ser preenchido retroativamente e que aqui aparece com 2.080 datas-sentinela e 43 datas implausíveis ([§8.7](#87-observações-de-qualidade-para-o-etl)). Uma série de retratos datados permitiria trocar parte dos **dados simulados** da análise de sobrevivência por eventos reais de transição.
+
+Agora cada execução grava dois arquivos:
+
+| Arquivo | Papel |
+|---|---|
+| `dados/bruto/dados_aneel_bruto.parquet` | retrato corrente, o que o ETL lê (nada mudou para ele) |
+| `dados/bruto/historico_aneel/dados_aneel_bruto_AAAA-MM-DD.parquet` | retrato preservado daquela publicação |
+
+**A data vem do dado, não do relógio.** O nome do arquivo usa `DatGeracaoConjuntoDados`, a data em que a ANEEL gerou o conjunto. Usar a data do download criaria dois arquivos idênticos com nomes diferentes só por baixar o mesmo retrato em dois dias. Por consequência, `arquivar` é **idempotente**: se o arquivo daquela data já existe, não é regravado.
+
+**Comparar dois retratos** — `mudancas_de_fase(anterior, atual)` devolve as usinas que mudaram de fase e as que entraram no cadastro, casando por `CodCEG` (único e nunca nulo nos 20.511 registros):
+
+```
+CodCEG                NomEmpreendimento   SigUFPrincipal  fase_antes        fase_depois
+EOL.CV.RN.032280-6.1  Paraíso Farol II    RN              Construção        Operação
+UFV.RS.BA.999999-9.1  Usina Nova Teste    CE              (não cadastrada)  Construção
+```
+
+(saída do teste da função, com um retrato sintético — hoje só há um retrato real arquivado, o de 18/09/2026, e a comparação exige dois.)
+
+**Custo:** ~0,8 MB por retrato, e só para UFV + EOL. Uma coleta diária por um ano dá ~290 MB, o que ainda cabe sem política de retenção. Se `--tipos` incluir hídricas e térmicas, vale reavaliar. A pasta fica dentro de `dados/bruto/`, então já está fora do versionamento e coberta pelas mesmas regras de LGPD da [§10](#10-compliance-segurança-e-privacidade) — o retrato bruto inclui `DscPropriRegimePariticipacao`, que é descartada no ETL.
+
+### 8.6 Perfil da última execução
 
 | Tipo | Operação | Construção | Construção não iniciada | Total | Potência outorgada |
 |---|---|---|---|---|---|
@@ -618,7 +649,7 @@ A ordem das colunas vem de `result.fields`, e não das chaves do primeiro regist
 
 As usinas não foram filtradas por fase, porque a camada bruta mantém tudo. Para potência instalada efetiva, o ETL deve filtrar `DscFaseUsina = 'Operação'`. Para análise de sobrevivência e pipeline de projetos, as outras fases são justamente o dado de interesse.
 
-### 8.6 Observações de qualidade (para o ETL)
+### 8.7 Observações de qualidade (para o ETL)
 
 Verificadas nos dados reais da última execução:
 
@@ -716,7 +747,7 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 | 3 | ~~`get_com_retry` repete erros `4xx` não-429~~ **Resolvido:** `4xx` (exceto 429) levanta na primeira tentativa ([§5.1](#51-get_com_retrysessao-url-kwargs)) | — | — |
 | 4 | ~~Coordenadas de `locais.csv` manuais e aproximadas~~ **Resolvido:** geradas da ANEEL por `gerar_locais.py`; a capacidade com clima a ≤ 300 km subiu de 77,3% para 96,5% ([§7.3](#73-escolha-dos-locais--locaiscsv)) | Resta: um ponto por (fonte, UF) é regional, não por usina | Subir `--por-grupo`, ou consultar a NASA por usina nas maiores (custo linear em chamadas) |
 | 5 | ~~NASA: vento/temperatura atrasam ~2 dias; irradiância horária ~3 meses, diária ~1 semana~~ | Janela recente sem parte das variáveis **Tratado:** o valor `-999` vira nulo com flag `faltante`, a coluna `medidas_faltantes` diz **quais** variáveis faltaram (as latências são diferentes por variável) e a `fato_clima` usa a série diária. A API expõe as duas colunas e o frontend escreve a ressalva na tela. Para análises horárias de irradiância, usar períodos com mais de 3 meses |
-| 6 | ANEEL é um retrato único, sobrescrito a cada execução | Perde-se o histórico de mudanças de fase (construção → operação) | Se a análise de sobrevivência precisar, arquivar retratos datados (`dados_aneel_bruto_AAAA-MM-DD.parquet`) |
+| 6 | ~~ANEEL é um retrato único, sobrescrito~~ **Resolvido:** cada execução arquiva `historico_aneel/dados_aneel_bruto_AAAA-MM-DD.parquet`, com data lida de `DatGeracaoConjuntoDados`, e `--mudancas-de-fase` compara dois retratos ([§8.5](#85-retratos-datados--historico_aneel)) | Resta: só há um retrato arquivado, então ainda não há série histórica para a análise de sobrevivência usar | Rodar a ingestão periodicamente (o valor aparece com o tempo) |
 | 7 | Sem testes automatizados | Regressões silenciosas (como o bug da regex do ONS) | Testes unitários de `_meses`, `_janelas_anuais`, `PADRAO_MENSAL` e paginação da ANEEL com respostas simuladas (`pytest` + `responses`), conforme §13 do system design |
 | 8 | Três comandos separados | Fácil esquecer uma fonte | Um orquestrador `python -m ingestao` que rode as três fontes em sequência |
 

@@ -489,7 +489,7 @@ cph.predict_median(novas)                                   # tempo mediano até
 
 | # | Limitação / premissa | Impacto | Como mitigar |
 |---|---|---|---|
-| 1 | **Os eventos são sintéticos** | Nenhuma conclusão sobre confiabilidade real | Sempre rotular como simulado na API/frontend e trocar por dado real se houver |
+| 1 | **Os eventos são sintéticos** | Nenhuma conclusão sobre confiabilidade real | Sempre rotular como simulado na API/frontend e trocar por dado real se houver. Um caminho já preparado: a ingestão passou a arquivar retratos datados da ANEEL (`historico_aneel/`, ver `doc_tecnica_ingestao.md` §8.5), e a transição de fase `Construção` → `Operação` entre dois retratos é um **evento real com data observada** |
 | 2 | **Só o 1º evento** por usina | Não há eventos recorrentes; após a falha a usina sai do risco | Estender para processo de renovação/recorrente (Andersen-Gill, PWP) |
 | 3 | `tipo_evento` independente do tempo | Não serve para riscos competitivos (Fine-Gray, cause-specific) | Gerar um tempo latente por causa e observar o mínimo |
 | 4 | Linha de base igual para todas as usinas da mesma fonte | Não há efeito de fabricante/modelo de equipamento, que não está no cadastro público | Adicionar fragilidade (*frailty*) gama por usina ou por grupo |
