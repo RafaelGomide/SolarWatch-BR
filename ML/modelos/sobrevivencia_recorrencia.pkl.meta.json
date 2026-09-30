@@ -1,0 +1,35 @@
+{
+  "salvo_em": "2026-09-30T18:00:25",
+  "classe": "PrevisorRecorrencia",
+  "sklearn_versao": "1.9.0",
+  "pandas_versao": "2.3.3",
+  "tipo": "recorrencia_manutencao",
+  "modelo": "andersen_gill + MCF",
+  "treinado_em": "2026-09-30T18:00:24",
+  "origem_treino": "eventos_manutencao_recorrentes.parquet",
+  "dado_simulado": true,
+  "n_usinas_treino": 1854,
+  "n_episodios": 4157,
+  "n_eventos": 2303,
+  "modelos_ajustados": [
+    "andersen_gill",
+    "pwp_tempo_total",
+    "pwp_gap_time"
+  ],
+  "beta_verdadeiro": {
+    "log_potencia_mw_c": 0.2,
+    "subsistema_NE": 0.25,
+    "subsistema_S": 0.1,
+    "subsistema_N": 0.15,
+    "ano_entrada_c": -0.04
+  },
+  "gamma_recorrencia": 0.15,
+  "max_estrato_episodio": 6,
+  "horizontes_meses": [
+    6,
+    12,
+    24,
+    36
+  ],
+  "aproximacao": "MCF da fonte x exp(beta_AG . x); multiplicador sobre média marginal"
+}

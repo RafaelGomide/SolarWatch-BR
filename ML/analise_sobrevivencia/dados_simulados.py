@@ -23,13 +23,34 @@ Censura à direita (administrativa): cada usina é observada da data de entrada
 em operação até a data do retrato da ANEEL. Se o tempo simulado até o evento
 passa dessa data, a usina fica censurada (`evento = 0`, sem `data_evento`).
 
+Eventos RECORRENTES
+-------------------
+Manutenção corretiva não acontece uma vez só: a usina é reparada e volta a
+operar sob risco. Além do 1º evento, o script gera o **processo completo** de
+cada usina, como um processo de renovação com deterioração:
+
+    gap_j ~ Weibull(k_fonte, lambda_fonte),  com  eta_j = beta·x + gamma*(j-1)
+
+ou seja, o relógio zera a cada reparo ("as good as repaired"), mas cada
+episódio novo carrega um risco `exp(gamma)` vezes maior que o anterior — o
+reparo não devolve a usina ao estado de fábrica. O processo de cada usina segue
+até ultrapassar a data do retrato, e o último episódio fica censurado.
+
+O episódio 1 do arquivo recorrente é, por construção, **o mesmo** evento do
+arquivo de 1º evento: os episódios seguintes são gerados a partir dele, então
+os dois arquivos são consistentes e o de 1º evento continua idêntico ao de
+antes para a mesma semente.
+
 Saída:
-    dados/simulados/eventos_manutencao_simulados.parquet
-    dados/simulados/eventos_manutencao_simulados.meta.json  (parâmetros + semente)
+    dados/simulados/eventos_manutencao_simulados.parquet       (1 linha por usina)
+    dados/simulados/eventos_manutencao_simulados.meta.json
+    dados/simulados/eventos_manutencao_recorrentes.parquet     (1 linha por episódio)
+    dados/simulados/eventos_manutencao_recorrentes.meta.json
 
 Uso:
     python -m ML.analise_sobrevivencia.dados_simulados
     python -m ML.analise_sobrevivencia.dados_simulados --seed 7 --potencia-minima-mw 5
+    python -m ML.analise_sobrevivencia.dados_simulados --gamma-recorrencia 0.0
 """
 
 from __future__ import annotations
@@ -48,6 +69,7 @@ from ingestao.armazenamento import gravar_parquet
 RAIZ = Path(__file__).resolve().parents[2]
 ENTRADA = RAIZ / "dados" / "bruto" / "dados_aneel_bruto.parquet"
 SAIDA = RAIZ / "dados" / "simulados" / "eventos_manutencao_simulados.parquet"
+SAIDA_RECORRENTES = RAIZ / "dados" / "simulados" / "eventos_manutencao_recorrentes.parquet"
 
 SEED_PADRAO = 42
 POTENCIA_MINIMA_MW_PADRAO = 1.0  # exclui microssistemas de 1 kW (pessoas físicas)
@@ -71,6 +93,15 @@ BETA = {
 }
 POTENCIA_REFERENCIA_MW = 30.0
 ANO_REFERENCIA = 2018
+
+# Recorrência: cada episódio após o 1º tem risco exp(GAMMA) vezes o anterior.
+# 0,15 = +16% de risco por reparo acumulado. Com gamma = 0 o processo vira uma
+# renovação pura (reparo perfeito), útil para comparar.
+GAMMA_RECORRENCIA = 0.15
+# Trava de segurança contra um processo que dispare. Com gamma > 0 os gaps
+# encurtam a cada episódio, então uma usina muito antiga e de alto risco pode
+# acumular dezenas de eventos; a trava só evita laço sem fim, e é avisada em log.
+MAX_EPISODIOS = 60
 
 # Tipo do evento, sorteado só quando ele ocorre (não afeta o tempo)
 TIPOS_EVENTO = {
@@ -170,6 +201,78 @@ def simular(usinas: pd.DataFrame, data_corte: pd.Timestamp, seed: int) -> pd.Dat
     ]]
 
 
+def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte: pd.Timestamp,
+                        seed: int, gamma: float = GAMMA_RECORRENCIA) -> pd.DataFrame:
+    """Processo completo de manutenções por usina, em formato de processo de contagem.
+
+    Uma linha por episódio, com o intervalo `(t_inicio_anos, t_fim_anos]` desde
+    a entrada em operação — é o formato que Andersen-Gill e PWP consomem
+    diretamente. O último episódio de cada usina é sempre censurado
+    (`evento = 0`): é o trecho em que ela chegou ao fim da observação sem falhar.
+
+    A semente é deslocada (`seed + 1`) para que os sorteios dos episódios 2+ não
+    consumam o mesmo fluxo aleatório do 1º evento, que precisa ficar intacto.
+    """
+    rng = np.random.default_rng(seed + 1)
+
+    k = usinas["fonte"].map(lambda f: WEIBULL[f]["k"]).to_numpy()
+    escala = usinas["fonte"].map(lambda f: WEIBULL[f]["lambda_anos"]).to_numpy()
+    eta = _preditor_linear(usinas).to_numpy()
+    observavel = ((data_corte - usinas["data_entrada_operacao"]).dt.days / 365.25).to_numpy()
+    primeiro_tempo = eventos["tempo_anos"].to_numpy()
+    primeiro_evento = eventos["evento"].to_numpy()
+
+    linhas, truncadas = [], []
+    for i in range(len(usinas)):
+        t_inicio, episodio = 0.0, 1
+        t_fim, evento = float(primeiro_tempo[i]), int(primeiro_evento[i])
+
+        while True:
+            linhas.append((i, episodio, t_inicio, t_fim, t_fim - t_inicio, evento))
+            if evento == 0:
+                break
+            if episodio >= MAX_EPISODIOS:
+                truncadas.append(int(eventos["id_usina"].iloc[i]))
+                break
+            # Reparado: o relógio do risco zera, mas o risco sobe exp(gamma) por episódio
+            episodio += 1
+            eta_episodio = eta[i] + gamma * (episodio - 1)
+            gap = escala[i] * (rng.exponential() / np.exp(eta_episodio)) ** (1 / k[i])
+            t_inicio, t_fim = t_fim, t_fim + gap
+            if t_fim > observavel[i]:               # passou do retrato: censura
+                t_fim, evento = float(observavel[i]), 0
+
+    if truncadas:
+        log.warning("[recorrentes] %d usina(s) atingiram a trava de %d episódios (%s); "
+                    "o processo delas fica truncado, sem o trecho censurado final",
+                    len(truncadas), MAX_EPISODIOS, truncadas[:5])
+
+    painel = pd.DataFrame(linhas, columns=["posicao", "episodio", "t_inicio_anos",
+                                           "t_fim_anos", "gap_anos", "evento"])
+    identificacao = eventos[["id_usina", "ceg", "fonte", "id_estado", "id_subsistema",
+                             "potencia_mw", "data_entrada_operacao"]].reset_index(drop=True)
+    painel = painel.join(identificacao, on="posicao").drop(columns="posicao")
+
+    painel["data_inicio"] = painel["data_entrada_operacao"] + pd.to_timedelta(
+        painel["t_inicio_anos"] * 365.25, unit="D").round("D")
+    painel["data_fim"] = painel["data_entrada_operacao"] + pd.to_timedelta(
+        painel["t_fim_anos"] * 365.25, unit="D").round("D")
+    painel["data_corte"] = data_corte
+
+    tipos = pd.Series(pd.NA, index=painel.index, dtype="string")
+    for fonte, probs in TIPOS_EVENTO.items():
+        alvo = (painel["fonte"] == fonte) & (painel["evento"] == 1)
+        tipos[alvo] = rng.choice(list(probs), size=int(alvo.sum()), p=list(probs.values()))
+    painel["tipo_evento"] = tipos
+
+    return painel[[
+        "id_usina", "ceg", "fonte", "id_estado", "id_subsistema", "potencia_mw",
+        "data_entrada_operacao", "data_corte", "episodio",
+        "t_inicio_anos", "t_fim_anos", "gap_anos", "evento", "data_inicio", "data_fim",
+        "tipo_evento",
+    ]].sort_values(["id_usina", "episodio"]).reset_index(drop=True)
+
+
 def _gravar_metadados(saida: Path, seed: int, potencia_minima_mw: float, df: pd.DataFrame) -> None:
     meta = {
         "gerado_em": datetime.now().isoformat(timespec="seconds"),
@@ -192,12 +295,46 @@ def _gravar_metadados(saida: Path, seed: int, potencia_minima_mw: float, df: pd.
     caminho.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _gravar_metadados_recorrentes(saida: Path, seed: int, potencia_minima_mw: float,
+                                  gamma: float, df: pd.DataFrame) -> None:
+    por_usina = df.groupby("id_usina")["evento"].sum()
+    meta = {
+        "gerado_em": datetime.now().isoformat(timespec="seconds"),
+        "descricao": ("Dados SINTÉTICOS de manutenção corretiva RECORRENTE por usina, "
+                      "em formato de processo de contagem (um intervalo por episódio)."),
+        "fonte_usinas": ENTRADA.relative_to(RAIZ).as_posix(),
+        "seed": seed,
+        "seed_episodios_2_em_diante": seed + 1,
+        "potencia_minima_mw": potencia_minima_mw,
+        "modelo": ("Processo de renovação com deterioração: gap_j ~ Weibull(k, lambda) "
+                   "com eta_j = beta·x + gamma*(j-1)"),
+        "gamma_recorrencia": gamma,
+        "max_episodios": MAX_EPISODIOS,
+        "weibull_por_fonte": WEIBULL,
+        "beta_verdadeiro": BETA,
+        "referencias_centralizacao": {
+            "potencia_mw": POTENCIA_REFERENCIA_MW, "ano_entrada": ANO_REFERENCIA,
+        },
+        "n_usinas": int(df["id_usina"].nunique()),
+        "n_episodios": len(df),
+        "n_eventos": int(df["evento"].sum()),
+        "eventos_por_usina": {
+            "media": float(por_usina.mean()), "maximo": int(por_usina.max()),
+            "distribuicao": {str(n): int(q) for n, q in por_usina.value_counts().sort_index().items()},
+        },
+    }
+    caminho = saida.with_name(saida.stem + ".meta.json")
+    caminho.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--seed", type=int, default=SEED_PADRAO)
     parser.add_argument("--potencia-minima-mw", type=float, default=POTENCIA_MINIMA_MW_PADRAO)
+    parser.add_argument("--gamma-recorrencia", type=float, default=GAMMA_RECORRENCIA,
+                        help="log do fator de risco por episódio (0 = reparo perfeito)")
     args = parser.parse_args()
 
     usinas, data_corte = carregar_usinas(args.potencia_minima_mw)
@@ -210,6 +347,19 @@ def main() -> None:
 
     gravar_parquet(eventos, SAIDA)
     _gravar_metadados(SAIDA, args.seed, args.potencia_minima_mw, eventos)
+
+    recorrentes = simular_recorrentes(eventos, usinas, data_corte, args.seed,
+                                      args.gamma_recorrencia)
+    por_usina = recorrentes.groupby("id_usina")["evento"].sum()
+    log.info("[recorrentes] %d episódios, %d eventos | eventos por usina: média %.2f, máx %d",
+             len(recorrentes), int(recorrentes["evento"].sum()),
+             por_usina.mean(), int(por_usina.max()))
+    log.info("[recorrentes] usinas com 0/1/2+ eventos: %d / %d / %d",
+             int((por_usina == 0).sum()), int((por_usina == 1).sum()), int((por_usina >= 2).sum()))
+
+    gravar_parquet(recorrentes, SAIDA_RECORRENTES)
+    _gravar_metadados_recorrentes(SAIDA_RECORRENTES, args.seed, args.potencia_minima_mw,
+                                  args.gamma_recorrencia, recorrentes)
 
 
 if __name__ == "__main__":

@@ -23,7 +23,8 @@
 11. [Artefatos salvos](#11-artefatos-salvos)
 12. [Como usar o modelo salvo](#12-como-usar-o-modelo-salvo)
 13. [Decisões metodológicas](#13-decisões-metodológicas)
-14. [Limitações e próximos passos](#14-limitações-e-próximos-passos)
+14. [Eventos recorrentes: Andersen-Gill e PWP](#14-eventos-recorrentes-andersen-gill-e-pwp)
+15. [Limitações e próximos passos](#15-limitações-e-próximos-passos)
 
 ---
 
@@ -52,9 +53,11 @@ ML/analise_sobrevivencia/
 ├── config.py            # covariáveis, horizontes, centralizações, k-folds
 ├── dados.py             # carga do treino (simulado) e das usinas da predição (dim_usina)
 ├── modelos.py           # KM, paramétricos, Cox, Weibull de regressão e o Previsor
+├── recorrentes.py       # Andersen-Gill, PWP (tempo total e gap time), MCF
 ├── avaliacao.py         # C-index k-fold, Schoenfeld, recuperação dos betas, calibração
-├── treinar.py           # orquestra tudo, salva pickles e tabelas
-└── resultados/          # kaplan_meier_por_fonte.png, calibracao.png, probabilidades_12m.png
+├── treinar.py           # 1º evento: orquestra tudo, salva pickles e tabelas
+├── treinar_recorrentes.py  # eventos recorrentes: AG, PWP, MCF e manutenções esperadas
+└── resultados/          # kaplan_meier_por_fonte.png, calibracao.png, probabilidades_12m.png, mcf_recorrentes.png
 ```
 
 ---
@@ -66,6 +69,8 @@ python -m ML.analise_sobrevivencia.dados_simulados    # (se ainda não existir) 
 python -m ML.analise_sobrevivencia.treinar            # ~20 s
 python -m ML.analise_sobrevivencia.treinar --horizontes 3 6 12
 python -m ML.analise_sobrevivencia.treinar --sem-graficos --sem-salvar
+
+python -m ML.analise_sobrevivencia.treinar_recorrentes   # eventos recorrentes (§15)
 ```
 
 | Argumento | Padrão | Efeito |
@@ -367,7 +372,109 @@ Para a API, o caminho é carregar o pickle na inicialização do processo e cham
 
 ---
 
-## 14. Limitações e próximos passos
+## 14. Eventos recorrentes: Andersen-Gill e PWP
+
+Tudo até aqui modela **o 1º evento**: depois da primeira manutenção a usina sai do conjunto de risco, como se tivesse deixado de existir. É uma simplificação forte para um ativo que é reparado e volta a operar — e apaga o caso mais interessante, o da usina que já quebrou várias vezes.
+
+`recorrentes.py` trabalha sobre o painel de episódios ([doc dos dados simulados §9.1](../ingestao/doc_tecnica_dados_simulados.md#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)): uma linha por intervalo `(t_inicio, t_fim]`, 4.157 episódios de 1.854 usinas, 2.303 eventos.
+
+### 14.1 Os três modelos
+
+| Modelo | Escala de tempo | Conjunto de risco | Premissa sobre o reparo |
+|---|---|---|---|
+| **Andersen-Gill (AG)** | total, desde a entrada em operação | a usina fica em risco o tempo todo | "as good as before": o reparo não muda nada, um só risco de base |
+| **PWP tempo total** | total | só quem já teve $j-1$ eventos entra no estrato $j$ | risco de base próprio por episódio |
+| **PWP gap time** | tempo desde o último reparo | idem | o relógio zera a cada reparo |
+
+A escolha não é de gosto: é uma afirmação sobre o que o reparo faz. O AG supõe que uma usina que já falhou cinco vezes tem o mesmo risco de base de uma que nunca falhou, e que toda a diferença cabe nas covariáveis. O PWP relaxa isso com um risco de base por episódio.
+
+Como o gerador destes dados **reinicia o relógio** a cada reparo e piora o risco a cada episódio, o **PWP gap time é o modelo correto aqui**. Os três são ajustados de propósito: o objetivo é medir o tamanho do erro de escolher o modelo errado, não escondê-lo.
+
+### 14.2 Erro-padrão agrupado por usina
+
+As linhas de uma mesma usina não são independentes: uma usina propensa a falhar contribui com vários episódios. Sem agrupar, o modelo trata 4.157 episódios como 4.157 observações independentes, quando são 1.854 usinas.
+
+| Covariável | SE ingênuo | SE agrupado | Razão |
+|---|---|---|---|
+| `log_potencia_mw_c` | 0,034 | 0,068 | **2,0×** |
+| `ano_entrada_c` | 0,007 | 0,030 | **4,4×** |
+| `subsistema_NE` | 0,117 | 0,092 | 0,78× |
+| `subsistema_S` | 0,135 | 0,167 | 1,24× |
+| `subsistema_N` | 0,214 | 0,153 | 0,72× |
+
+Nas duas covariáveis contínuas — as que variam dentro da usina ao longo dos episódios — o erro-padrão ingênuo é **2 a 4 vezes menor** que o correto. Um IC construído com ele daria significância a quase tudo. Nas dummies de subsistema a razão fica perto de 1 e às vezes abaixo, o que é esperado: o sanduíche robusto não é uniformemente maior, só é o estimador certo.
+
+Detalhe de implementação: o `CoxTimeVaryingFitter` do lifelines 0.30 ainda **não implementa** `robust=True` (levanta `NotImplementedError`). Os modelos de processo de contagem são ajustados com `CoxPHFitter` usando `entry_col` (entrada tardia) e `cluster_col`, que dá o mesmo modelo com o erro-padrão agrupado.
+
+### 14.3 Recuperação dos parâmetros verdadeiros
+
+Como o dado é simulado, dá para perguntar se cada modelo acerta os $\beta$ do gerador:
+
+| Covariável | Verdadeiro | AG | PWP tempo total | PWP gap time |
+|---|---|---|---|---|
+| `log_potencia_mw_c` | 0,20 | 0,169 | 0,195 | 0,179 |
+| `ano_entrada_c` | −0,04 | −0,040 | −0,047 | −0,050 |
+| `subsistema_NE` | 0,25 | 0,115 | 0,090 | 0,123 |
+| `subsistema_N` | 0,15 | 0,123 | 0,131 | 0,119 |
+| `subsistema_S` | 0,10 | −0,135 | −0,174 | −0,176 |
+| **Cobertura dos IC 95%** | | **100%** | **100%** | **80%** |
+
+Três leituras:
+
+1. **O AG cobre tudo, mas por ser vago.** Seus ICs são os mais largos (SE de 0,068 contra 0,034 do PWP gap time em `log_potencia_mw_c`), então cobrir o valor verdadeiro custa pouco. Os pontos estimados são os mais atenuados — `subsistema_NE` sai em 0,115 contra 0,25 verdadeiro.
+2. **O PWP gap time é o mais preciso e o único que erra um IC.** Estimativas mais próximas e ICs mais estreitos, o que é o esperado do modelo correto — e é exatamente por isso que ele é o que "paga" quando erra: com IC estreito, um desvio vira falta de cobertura.
+3. **`subsistema_S` erra em todos os três**, com sinal trocado. Não é falha de modelo: o Sul tem poucas usinas eólicas na base e o efeito verdadeiro (+0,10) é pequeno perto do ruído amostral. O mesmo já acontecia no Cox de 1º evento ([§8.3](#83-recuperação-dos-parâmetros-verdadeiros)).
+
+### 14.4 O estrato de episódio
+
+O PWP estratifica por número do episódio, mas episódios altos têm poucos eventos. Episódios acima de `MAX_ESTRATO = 6` entram todos no mesmo estrato. O valor é um compromisso medido, não um chute:
+
+| `MAX_ESTRATO` | 3 | 4 | 6 | 8 |
+|---|---|---|---|---|
+| Cobertura dos IC | 60% | 60% | **80%** | 80% |
+| `ano_entrada_c` (verdadeiro −0,040) | −0,060 | −0,056 | −0,050 | −0,047 |
+
+Agrupar demais junta episódios com riscos de base bem diferentes no mesmo estrato (o gerador piora o risco a cada reparo) e enviesa os coeficientes; agrupar de menos deixa estratos com um punhado de eventos. A partir de 6 o ganho satura.
+
+### 14.5 Função média cumulativa (MCF)
+
+A MCF é o análogo do Kaplan-Meier para eventos recorrentes. Em vez de "fração que ainda não falhou", responde **"quantas manutenções uma usina típica já acumulou"**:
+
+$$\text{MCF}(t) = \sum_{s \le t} \frac{dN(s)}{Y(s)}$$
+
+com $Y(s)$ = usinas ainda sob observação em $s$.
+
+| Manutenções acumuladas por usina | 1 ano | 3 anos | 5 anos | 10 anos |
+|---|---|---|---|---|
+| Eólica | 0,09 | 0,45 | 0,92 | 2,32 |
+| Solar | 0,05 | 0,29 | 0,58 | 1,57 |
+
+A curvatura para cima é a deterioração: a segunda metade da década acumula mais eventos que a primeira.
+
+### 14.6 Saída de produto: manutenções esperadas
+
+`PrevisorRecorrencia` responde o que o modelo de 1º evento não consegue — **quantas** manutenções esperar, e não apenas se haverá alguma:
+
+$$E[N(t_0, t_0+h) \mid x] \approx \big[\text{MCF}_\text{fonte}(t_0+h) - \text{MCF}_\text{fonte}(t_0)\big] \cdot e^{\beta_{AG} \cdot x}$$
+
+A MCF dá o nível da fonte na idade da usina e o AG dá o multiplicador — o AG é o modelo de **taxa**, e é dele que sai um coeficiente com leitura de "quantas vezes mais eventos por ano". **É uma aproximação:** o multiplicador é aplicado a uma média marginal, não a uma MCF ajustada por covariáveis. Serve para ordenar usinas e dar ordem de grandeza.
+
+Médias nas 93 unidades com cadastro confiável:
+
+| Fonte | 6 meses | 12 meses | 24 meses | 36 meses |
+|---|---|---|---|---|
+| Eólica | 0,23 | 0,49 | 1,00 | 1,54 |
+| Solar | 0,11 | 0,19 | 0,39 | 0,62 |
+
+As cinco no topo são todas eólicas do Nordeste com mais de 14 anos — EOL PRA FORMOSA lidera, com 1,10 manutenção esperada em 12 meses. É a mesma ordenação do card de 1º evento, o que era de esperar: os dois modelos leem as mesmas covariáveis.
+
+### 14.7 O que ainda não está ligado
+
+O previsor de recorrência é treinado e salvo (`ML/modelos/sobrevivencia_recorrencia.pkl`), mas **não** é servido pela API nem aparece no frontend — o card continua sendo o de 1º evento. Ligar exigiria um endpoint novo e um segundo card, o que não foi feito aqui.
+
+---
+
+## 15. Limitações e próximos passos
 
 | # | Limitação | Impacto | Próximo passo |
 |---|---|---|---|
@@ -375,7 +482,7 @@ Para a API, o caminho é carregar o pickle na inicialização do processo e cham
 | 2 | C-index de 0,567 | Discriminação fraca | É o teto deste gerador. Com dado real, avaliar se há sinal mais forte |
 | 3 | Só 93 das 308 unidades recebem previsão | Cobertura parcial do frontend | Melhorar o vínculo ONS × ANEEL ([ETL §15](../ETL/doc_tecnica_etl.md#15-limitações-conhecidas-e-próximos-passos)) |
 | 4 | Efeitos regionais imprecisos | ICs largos, estimativas distantes | Inerente à geografia do parque; só mais dados resolvem |
-| 5 | Um evento por usina | Sem eventos recorrentes | Modelos de recorrência (Andersen-Gill) quando houver dado real |
+| 5 | ~~Um evento por usina~~ **Resolvido:** Andersen-Gill e PWP ajustados sobre o painel de episódios ([§14](#14-eventos-recorrentes-andersen-gill-e-pwp)) | Resta: o produto servido pela API é só o de 1º evento | Endpoint e card de manutenções esperadas ([§14.7](#147-o-que-ainda-não-está-ligado)) |
 | 6 | Sem intervalo na probabilidade | O card mostra um ponto | Bootstrap sobre os coeficientes do Cox para banda de confiança |
 | 7 | Extrapolação Weibull não validada | 21 usinas dependem dela, fora do suporte observado | Por definição não há dado para validar; sinalizar no frontend quando `metodo_extrapolacao = "weibull"` |
 | 8 | Sem testes automatizados | Regressões silenciosas | `pytest`: invariantes da carga, probabilidade em [0,1], monotonicidade em relação ao horizonte, e o caso do [§10](#10-o-bug-da-extrapolação-e-como-foi-resolvido) (usina antiga não pode dar 1,00) |

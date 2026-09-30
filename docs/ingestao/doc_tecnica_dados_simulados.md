@@ -310,6 +310,68 @@ Invariantes verificados na geração atual:
 
 ---
 
+## 9.1 Eventos recorrentes — `eventos_manutencao_recorrentes.parquet`
+
+Manutenção corretiva não acontece uma vez só: a usina é reparada e volta a operar sob risco. O arquivo de 1º evento trata a usina como se ela deixasse de existir depois da primeira falha, o que apaga justamente o caso que mais interessa à operação — a usina que já quebrou várias vezes.
+
+O gerador produz também o **processo completo** de cada usina, como um processo de renovação com deterioração:
+
+$$\text{gap}_j \sim \text{Weibull}(k_\text{fonte},\ \lambda_\text{fonte}), \qquad \eta_j = \beta \cdot x + \gamma\,(j-1)$$
+
+Duas premissas, ambas deliberadas:
+
+- **O relógio zera a cada reparo** ("as good as repaired"): o risco do episódio $j$ depende do tempo desde a última manutenção, não da idade total da usina.
+- **O reparo não devolve a usina ao estado de fábrica**: cada episódio novo tem risco $e^{\gamma}$ vezes o anterior. Com o padrão $\gamma = 0{,}15$, são +16% por reparo acumulado. `--gamma-recorrencia 0` gera a renovação pura, para comparação.
+
+A escolha importa porque **determina qual modelo é o correto**: um processo que zera o relógio é o que o PWP *gap time* estima, não o Andersen-Gill ([doc da análise §14](../ML/doc_tecnica_analise_sobrevivencia.md#14-eventos-recorrentes-andersen-gill-e-pwp)).
+
+### Consistência com o arquivo de 1º evento
+
+O episódio 1 do arquivo recorrente **é** a linha do arquivo de 1º evento: os episódios seguintes são gerados a partir dele, e o fluxo aleatório dos episódios 2+ usa `seed + 1` para não consumir o mesmo fluxo do 1º evento. Consequência prática: o `eventos_manutencao_simulados.parquet` continua idêntico ao de antes da mudança, para a mesma semente — verificado comparando o conteúdo contra a versão anterior no git.
+
+### Formato: processo de contagem
+
+Uma linha por episódio, com o intervalo `(t_inicio_anos, t_fim_anos]` desde a entrada em operação. É o formato que Andersen-Gill e PWP consomem direto.
+
+| Coluna | Exemplo | Descrição |
+|---|---|---|
+| `id_usina`, `ceg`, `fonte`, `id_estado`, `id_subsistema`, `potencia_mw` | | Iguais às do arquivo de 1º evento |
+| `episodio` | `3` | Número do episódio na usina (1, 2, 3...) |
+| `t_inicio_anos` | `5.35` | Início do intervalo de risco (o reparo anterior) |
+| `t_fim_anos` | `9.30` | Fim: o evento, ou a data do retrato |
+| `gap_anos` | `3.95` | `t_fim − t_inicio`: escala de tempo do PWP gap time |
+| `evento` | `1` / `0` | 1 = manutenção; 0 = censura |
+| `data_inicio`, `data_fim` | `2004-03-27` | As mesmas datas em calendário |
+| `tipo_evento` | `pas` / nulo | Componente afetado |
+
+Invariantes verificados na geração atual:
+
+- os intervalos de uma usina são **encadeados e sem buraco**: `t_inicio` de um episódio é o `t_fim` do anterior, começando em 0;
+- `t_fim > t_inicio` e `gap_anos > 0` em todas as linhas;
+- **o último episódio de cada usina é sempre censurado** — é o trecho em que ela chegou ao fim da observação sem falhar;
+- `episodio = 1` reproduz exatamente o arquivo de 1º evento (tempo e indicador).
+
+### Perfil do conjunto gerado
+
+4.157 episódios de 1.854 usinas, com 2.303 eventos.
+
+| Eventos na usina | Usinas |
+|---|---|
+| 0 | 836 |
+| 1 | 450 |
+| 2 a 3 | 402 |
+| 4 ou mais | 166 |
+
+Média de 1,24 evento por usina — 1,78 na eólica e 0,42 na solar. A deterioração aparece no encurtamento dos intervalos entre manutenções:
+
+| Episódio | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| Gap médio (anos) | 3,34 | 2,80 | 2,48 | 2,19 | 2,13 | 1,63 |
+
+Há uma trava de segurança em 60 episódios por usina, que **não** foi atingida (o máximo observado é 20, numa eólica de 1998 com 27,7 anos de operação). Se fosse atingida, o processo daquela usina ficaria truncado sem o trecho censurado final, e um aviso é emitido no log.
+
+---
+
 ## 10. Metadados e reprodutibilidade
 
 Junto ao parquet é gravado `eventos_manutencao_simulados.meta.json`:
@@ -490,7 +552,7 @@ cph.predict_median(novas)                                   # tempo mediano até
 | # | Limitação / premissa | Impacto | Como mitigar |
 |---|---|---|---|
 | 1 | **Os eventos são sintéticos** | Nenhuma conclusão sobre confiabilidade real | Sempre rotular como simulado na API/frontend e trocar por dado real se houver. Um caminho já preparado: a ingestão passou a arquivar retratos datados da ANEEL (`historico_aneel/`, ver `doc_tecnica_ingestao.md` §8.5), e a transição de fase `Construção` → `Operação` entre dois retratos é um **evento real com data observada** |
-| 2 | **Só o 1º evento** por usina | Não há eventos recorrentes; após a falha a usina sai do risco | Estender para processo de renovação/recorrente (Andersen-Gill, PWP) |
+| 2 | ~~**Só o 1º evento** por usina~~ **Resolvido:** o gerador produz também o processo completo em `eventos_manutencao_recorrentes.parquet` ([§9.1](#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)), e a análise ajusta Andersen-Gill e PWP ([doc da análise §14](../ML/doc_tecnica_analise_sobrevivencia.md#14-eventos-recorrentes-andersen-gill-e-pwp)) | Resta: o produto servido pela API ainda é o de 1º evento | Expor as manutenções esperadas como segundo card/endpoint |
 | 3 | `tipo_evento` independente do tempo | Não serve para riscos competitivos (Fine-Gray, cause-specific) | Gerar um tempo latente por causa e observar o mínimo |
 | 4 | Linha de base igual para todas as usinas da mesma fonte | Não há efeito de fabricante/modelo de equipamento, que não está no cadastro público | Adicionar fragilidade (*frailty*) gama por usina ou por grupo |
 | 5 | Efeitos das covariáveis constantes no tempo | Hipótese PH vale por construção dentro da fonte | Para testar diagnósticos, gerar uma variante com efeito tempo-dependente |
