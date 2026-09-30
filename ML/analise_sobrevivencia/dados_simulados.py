@@ -19,6 +19,28 @@ Modelo gerador — Weibull de riscos proporcionais (PH):
 - As covariáveis têm efeito proporcional conhecido (`BETA`), o que permite
   validar se o Cox/Weibull ajustado recupera os coeficientes verdadeiros.
 
+Fragilidade (frailty) gama
+--------------------------
+Duas usinas com a mesma potência, região e ano de entrada não são iguais: o
+fabricante do equipamento, a qualidade da montagem e o regime de operação não
+estão no cadastro público. O modelo representa isso com um fator aleatório por
+usina, comum a todos os seus episódios:
+
+    h(t | x, Z) = Z * h0_fonte(t) * exp(beta · x),   Z ~ Gama(1/theta, theta)
+
+`Z` tem média 1 e variância `theta`, então ele não desloca o risco médio, só o
+**espalha**: com o padrão `theta = 0,5`, metade das usinas tem `Z < 0,8` e 10%
+tem `Z > 2` — usinas "problemáticas" que quebram mais do que suas covariáveis
+explicam. `--variancia-frailty 0` desliga (todas as usinas com `Z = 1`).
+
+`Z` é **latente**: aparece no arquivo como `frailty` só porque o dado é
+simulado, para permitir validar o estimador. Não é covariável do modelo — num
+dado real ele não seria observável.
+
+Com frailty, o risco marginal (integrando `Z`) deixa de ser proporcional mesmo
+com covariáveis constantes, e o Cox comum **atenua** os coeficientes: é o
+efeito conhecido de heterogeneidade não observada.
+
 Censura à direita (administrativa): cada usina é observada da data de entrada
 em operação até a data do retrato da ANEEL. Se o tempo simulado até o evento
 passa dessa data, a usina fica censurada (`evento = 0`, sem `data_evento`).
@@ -94,10 +116,18 @@ BETA = {
 POTENCIA_REFERENCIA_MW = 30.0
 ANO_REFERENCIA = 2018
 
+# Fragilidade: variância do fator aleatório por usina (média sempre 1).
+# 0,5 = desvio-padrão de 0,71; 0 desliga a heterogeneidade não observada.
+VARIANCIA_FRAILTY = 0.5
+
 # Recorrência: cada episódio após o 1º tem risco exp(GAMMA) vezes o anterior.
 # 0,15 = +16% de risco por reparo acumulado. Com gamma = 0 o processo vira uma
 # renovação pura (reparo perfeito), útil para comparar.
 GAMMA_RECORRENCIA = 0.15
+# A deterioração satura: depois de tantos reparos a usina já está no seu pior
+# estado, e continuar multiplicando o risco levaria a centenas de eventos numa
+# usina de alta fragilidade — que o gerador produziria, mas nenhuma operação real.
+SATURACAO_DETERIORACAO = 10
 # Trava de segurança contra um processo que dispare. Com gamma > 0 os gaps
 # encurtam a cada episódio, então uma usina muito antiga e de alto risco pode
 # acumular dezenas de eventos; a trava só evita laço sem fim, e é avisada em log.
@@ -168,13 +198,28 @@ def _preditor_linear(usinas: pd.DataFrame) -> pd.Series:
     return sum(BETA[nome] * valor for nome, valor in x.items())
 
 
-def simular(usinas: pd.DataFrame, data_corte: pd.Timestamp, seed: int) -> pd.DataFrame:
+def sortear_frailty(n: int, variancia: float, seed: int) -> np.ndarray:
+    """Fator de fragilidade por usina: Gama de média 1 e variância `variancia`.
+
+    Fluxo aleatório próprio (`seed + 2`) para que ligar ou desligar a
+    fragilidade não desloque os demais sorteios.
+    """
+    if variancia <= 0:
+        return np.ones(n)
+    rng = np.random.default_rng(seed + 2)
+    return rng.gamma(shape=1 / variancia, scale=variancia, size=n)
+
+
+def simular(usinas: pd.DataFrame, data_corte: pd.Timestamp, seed: int,
+            variancia_frailty: float = VARIANCIA_FRAILTY) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     df = usinas.copy()
 
     k = df["fonte"].map(lambda f: WEIBULL[f]["k"])
     escala = df["fonte"].map(lambda f: WEIBULL[f]["lambda_anos"])
-    eta = _preditor_linear(df)
+    df["frailty"] = sortear_frailty(len(df), variancia_frailty, seed)
+    # log(Z) entra como deslocamento do preditor linear: Z multiplica o risco
+    eta = _preditor_linear(df) + np.log(df["frailty"])
 
     # Inversão da função de sobrevivência Weibull-PH
     tempo_ate_evento = escala * (rng.exponential(size=len(df)) / np.exp(eta)) ** (1 / k)
@@ -197,7 +242,7 @@ def simular(usinas: pd.DataFrame, data_corte: pd.Timestamp, seed: int) -> pd.Dat
     return df[[
         "id_usina", "ceg", "fonte", "sig_tipo_geracao", "id_estado", "id_subsistema",
         "potencia_mw", "data_entrada_operacao", "data_corte",
-        "tempo_anos", "evento", "data_evento", "tipo_evento",
+        "tempo_anos", "evento", "data_evento", "tipo_evento", "frailty",
     ]]
 
 
@@ -217,7 +262,10 @@ def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte:
 
     k = usinas["fonte"].map(lambda f: WEIBULL[f]["k"]).to_numpy()
     escala = usinas["fonte"].map(lambda f: WEIBULL[f]["lambda_anos"]).to_numpy()
-    eta = _preditor_linear(usinas).to_numpy()
+    # Mesmo Z em todos os episódios da usina: é isso que torna a fragilidade
+    # estimável (ela vira correlação entre os episódios de uma mesma usina)
+    frailty = eventos["frailty"].to_numpy()
+    eta = _preditor_linear(usinas).to_numpy() + np.log(frailty)
     observavel = ((data_corte - usinas["data_entrada_operacao"]).dt.days / 365.25).to_numpy()
     primeiro_tempo = eventos["tempo_anos"].to_numpy()
     primeiro_evento = eventos["evento"].to_numpy()
@@ -236,7 +284,7 @@ def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte:
                 break
             # Reparado: o relógio do risco zera, mas o risco sobe exp(gamma) por episódio
             episodio += 1
-            eta_episodio = eta[i] + gamma * (episodio - 1)
+            eta_episodio = eta[i] + gamma * min(episodio - 1, SATURACAO_DETERIORACAO)
             gap = escala[i] * (rng.exponential() / np.exp(eta_episodio)) ** (1 / k[i])
             t_inicio, t_fim = t_fim, t_fim + gap
             if t_fim > observavel[i]:               # passou do retrato: censura
@@ -250,7 +298,7 @@ def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte:
     painel = pd.DataFrame(linhas, columns=["posicao", "episodio", "t_inicio_anos",
                                            "t_fim_anos", "gap_anos", "evento"])
     identificacao = eventos[["id_usina", "ceg", "fonte", "id_estado", "id_subsistema",
-                             "potencia_mw", "data_entrada_operacao"]].reset_index(drop=True)
+                             "potencia_mw", "data_entrada_operacao", "frailty"]].reset_index(drop=True)
     painel = painel.join(identificacao, on="posicao").drop(columns="posicao")
 
     painel["data_inicio"] = painel["data_entrada_operacao"] + pd.to_timedelta(
@@ -269,7 +317,7 @@ def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte:
         "id_usina", "ceg", "fonte", "id_estado", "id_subsistema", "potencia_mw",
         "data_entrada_operacao", "data_corte", "episodio",
         "t_inicio_anos", "t_fim_anos", "gap_anos", "evento", "data_inicio", "data_fim",
-        "tipo_evento",
+        "tipo_evento", "frailty",
     ]].sort_values(["id_usina", "episodio"]).reset_index(drop=True)
 
 
@@ -281,7 +329,9 @@ def _gravar_metadados(saida: Path, seed: int, potencia_minima_mw: float, df: pd.
         "seed": seed,
         "potencia_minima_mw": potencia_minima_mw,
         "data_minima_entrada": DATA_MINIMA_ENTRADA,
-        "modelo": "Weibull de riscos proporcionais, linha de base por fonte",
+        "modelo": ("Weibull de riscos proporcionais com fragilidade gama por usina, "
+                   "linha de base por fonte"),
+        "variancia_frailty": float(df["frailty"].var()) if "frailty" in df else 0.0,
         "weibull_por_fonte": WEIBULL,
         "beta_verdadeiro": BETA,
         "referencias_centralizacao": {
@@ -309,6 +359,8 @@ def _gravar_metadados_recorrentes(saida: Path, seed: int, potencia_minima_mw: fl
         "modelo": ("Processo de renovação com deterioração: gap_j ~ Weibull(k, lambda) "
                    "com eta_j = beta·x + gamma*(j-1)"),
         "gamma_recorrencia": gamma,
+        "saturacao_deterioracao": SATURACAO_DETERIORACAO,
+        "variancia_frailty": float(df.drop_duplicates("id_usina")["frailty"].var()),
         "max_episodios": MAX_EPISODIOS,
         "weibull_por_fonte": WEIBULL,
         "beta_verdadeiro": BETA,
@@ -335,12 +387,17 @@ def main() -> None:
     parser.add_argument("--potencia-minima-mw", type=float, default=POTENCIA_MINIMA_MW_PADRAO)
     parser.add_argument("--gamma-recorrencia", type=float, default=GAMMA_RECORRENCIA,
                         help="log do fator de risco por episódio (0 = reparo perfeito)")
+    parser.add_argument("--variancia-frailty", type=float, default=VARIANCIA_FRAILTY,
+                        help="variância da fragilidade gama por usina (0 = desliga)")
     args = parser.parse_args()
 
     usinas, data_corte = carregar_usinas(args.potencia_minima_mw)
     log.info("%d usinas reais da ANEEL como base (retrato de %s)", len(usinas), data_corte.date())
 
-    eventos = simular(usinas, data_corte, args.seed)
+    eventos = simular(usinas, data_corte, args.seed, args.variancia_frailty)
+    log.info("[frailty] variância pedida %.2f, obtida %.2f | Z: mín %.2f, mediana %.2f, máx %.2f",
+             args.variancia_frailty, eventos["frailty"].var(), eventos["frailty"].min(),
+             eventos["frailty"].median(), eventos["frailty"].max())
     for fonte, grupo in eventos.groupby("fonte"):
         log.info("  %s: %d usinas, %d eventos, censura %.1f%%",
                  fonte, len(grupo), grupo["evento"].sum(), 100 * (1 - grupo["evento"].mean()))

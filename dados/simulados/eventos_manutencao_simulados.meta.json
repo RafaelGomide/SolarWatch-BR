@@ -1,11 +1,12 @@
 {
-  "gerado_em": "2026-09-18T16:08:52",
+  "gerado_em": "2026-09-30T18:11:35",
   "descricao": "Dados SINTÉTICOS de 1º evento de manutenção corretiva/falha por usina.",
   "fonte_usinas": "dados/bruto/dados_aneel_bruto.parquet",
   "seed": 42,
   "potencia_minima_mw": 1.0,
   "data_minima_entrada": "1990-01-01",
-  "modelo": "Weibull de riscos proporcionais, linha de base por fonte",
+  "modelo": "Weibull de riscos proporcionais com fragilidade gama por usina, linha de base por fonte",
+  "variancia_frailty": 0.5362781786255764,
   "weibull_por_fonte": {
     "eolica": {
       "k": 1.6,
@@ -42,5 +43,5 @@
     }
   },
   "n_usinas": 1854,
-  "n_eventos": 1018
+  "n_eventos": 916
 }

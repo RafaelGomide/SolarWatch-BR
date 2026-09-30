@@ -251,3 +251,85 @@ class PrevisorRecorrencia:
             saida[f"manutencoes_esperadas_{meses}m"] = np.round(base * fatores, 3)
         saida["taxa_relativa"] = fatores
         return saida
+
+
+# ------------------------------------------------------------------ frailty
+def _exposicao(painel: pd.DataFrame, mcf: pd.DataFrame) -> pd.DataFrame:
+    """Uma linha por usina: eventos observados e exposição esperada pela MCF.
+
+    A exposição não é o tempo de observação em anos: o risco de base cresce com
+    a idade, então dois anos de uma usina nova não valem dois anos de uma usina
+    velha. `MCF_fonte(T_i)` é quantos eventos uma usina *média* daquela fonte
+    teria acumulado em `T_i` anos — é a escala certa para comparar usinas de
+    idades diferentes.
+    """
+    por_usina = painel.groupby(ID).agg(
+        eventos=(EVENTO, "sum"), observacao_anos=(FIM, "max"),
+        **{c: (c, "first") for c in [ESTRATO, *COVARIAVEIS]})
+    por_usina["exposicao"] = [
+        max(np.interp(t, mcf.loc[mcf[ESTRATO] == fonte, "tempo_anos"],
+                      mcf.loc[mcf[ESTRATO] == fonte, "mcf"]), 1e-6)
+        for t, fonte in zip(por_usina["observacao_anos"], por_usina[ESTRATO])
+    ]
+    return por_usina.reset_index()
+
+
+def estimar_frailty_gama(painel: pd.DataFrame, mcf: pd.DataFrame) -> dict:
+    """Estima a variância da fragilidade gama por usina.
+
+    Com eventos recorrentes, o Andersen-Gill com fragilidade gama tem a mesma
+    verossimilhança de uma **binomial negativa** sobre a contagem de eventos por
+    usina: o parâmetro de dispersão da NB *é* a variância da fragilidade. Isso
+    permite estimá-la com `statsmodels`, sem um ajustador de frailty dedicado
+    (que o lifelines não tem).
+
+        N_i ~ NB(media = MCF_fonte(T_i) · exp(beta · x_i),  dispersao = theta)
+
+    O teste contra o Poisson (`theta = 0`) é o teste de que a fragilidade
+    existe: rejeitar quer dizer que sobra variação entre usinas depois das
+    covariáveis — exatamente o que a linha de base única por fonte ignorava.
+    """
+    import statsmodels.api as sm
+
+    dados = _exposicao(painel, mcf)
+    X = sm.add_constant(pd.get_dummies(dados[[ESTRATO, *COVARIAVEIS]], columns=[ESTRATO],
+                                       drop_first=True).astype(float))
+    y = dados["eventos"].to_numpy()
+    offset = np.log(dados["exposicao"].to_numpy())
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        poisson = sm.GLM(y, X, family=sm.families.Poisson(), offset=offset).fit()
+        nb = sm.NegativeBinomial(y, X, loglike_method="nb2", offset=offset).fit(disp=0)
+
+    theta = float(nb.params["alpha"])
+    ic = nb.conf_int().loc["alpha"]
+    razao_verossimilhanca = 2 * (nb.llf - poisson.llf)
+
+    log.info("[frailty] theta estimado = %.3f (IC95 %.3f a %.3f) | LR vs Poisson = %.1f",
+             theta, ic[0], ic[1], razao_verossimilhanca)
+
+    dados["frailty_posterior"] = _frailty_posterior(dados, nb, offset, theta)
+    return {
+        "theta": theta,
+        "ic_inferior": float(ic[0]),
+        "ic_superior": float(ic[1]),
+        "lr_vs_poisson": float(razao_verossimilhanca),
+        "por_usina": dados,
+        "modelo_nb": nb,
+    }
+
+
+def _frailty_posterior(dados: pd.DataFrame, nb, offset: np.ndarray, theta: float) -> np.ndarray:
+    """E[Z_i | dados] — Bayes empírico, conjugado gama-Poisson.
+
+        E[Z_i | N_i] = (1/theta + N_i) / (1/theta + mu_i)
+
+    Lê-se direto: a usina que teve mais eventos do que o esperado para o seu
+    perfil (`N_i > mu_i`) sai com Z > 1. O `1/theta` é o peso do encolhimento
+    para 1 — com pouca evidência, a estimativa não dispara.
+    """
+    if theta <= 0:
+        return np.ones(len(dados))
+    mu = nb.predict(exog=nb.model.exog, offset=offset, which="mean")
+    return (1 / theta + dados["eventos"].to_numpy()) / (1 / theta + mu)

@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-09-30T17:54:06",
+  "gerado_em": "2026-09-30T18:11:35",
   "descricao": "Dados SINTÉTICOS de manutenção corretiva RECORRENTE por usina, em formato de processo de contagem (um intervalo por episódio).",
   "fonte_usinas": "dados/bruto/dados_aneel_bruto.parquet",
   "seed": 42,
@@ -7,6 +7,8 @@
   "potencia_minima_mw": 1.0,
   "modelo": "Processo de renovação com deterioração: gap_j ~ Weibull(k, lambda) com eta_j = beta·x + gamma*(j-1)",
   "gamma_recorrencia": 0.15,
+  "saturacao_deterioracao": 10,
+  "variancia_frailty": 0.5362781786255764,
   "max_episodios": 60,
   "weibull_por_fonte": {
     "eolica": {
@@ -30,25 +32,29 @@
     "ano_entrada": 2018
   },
   "n_usinas": 1854,
-  "n_episodios": 4157,
-  "n_eventos": 2303,
+  "n_episodios": 4116,
+  "n_eventos": 2262,
   "eventos_por_usina": {
-    "media": 1.2421790722761596,
-    "maximo": 20,
+    "media": 1.220064724919094,
+    "maximo": 22,
     "distribuicao": {
-      "0": 836,
-      "1": 450,
-      "2": 244,
-      "3": 158,
-      "4": 73,
-      "5": 39,
-      "6": 26,
-      "7": 8,
-      "8": 7,
-      "9": 8,
-      "10": 2,
-      "12": 2,
-      "20": 1
+      "0": 938,
+      "1": 417,
+      "2": 204,
+      "3": 122,
+      "4": 55,
+      "5": 43,
+      "6": 28,
+      "7": 12,
+      "8": 9,
+      "9": 3,
+      "10": 7,
+      "11": 4,
+      "12": 1,
+      "13": 6,
+      "14": 3,
+      "17": 1,
+      "22": 1
     }
   }
 }

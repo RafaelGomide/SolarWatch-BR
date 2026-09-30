@@ -1,25 +1,25 @@
 {
-  "salvo_em": "2026-09-19T20:44:54",
+  "salvo_em": "2026-09-30T18:28:39",
   "classe": "PrevisorSobrevivencia",
-  "sklearn_versao": "1.9.1",
+  "sklearn_versao": "1.9.0",
   "pandas_versao": "2.3.3",
   "tipo": "sobrevivencia_manutencao",
   "modelo": "cox_ph_estratificado_por_fonte",
-  "treinado_em": "2026-09-19T20:44:51",
+  "treinado_em": "2026-09-30T18:28:38",
   "origem_treino": "eventos_manutencao_simulados.parquet",
   "dado_simulado": true,
   "n_usinas_treino": 1854,
-  "n_eventos": 1018,
+  "n_eventos": 916,
   "cindex_cv": {
     "k": 5,
-    "cindex_medio": 0.5666065905629554,
-    "cindex_desvio": 0.021988143269082563,
+    "cindex_medio": 0.5775138089186177,
+    "cindex_desvio": 0.022907030559060477,
     "scores": [
-      0.5936418861859489,
-      0.5755239334459179,
-      0.5814634014779654,
-      0.534293859526538,
-      0.5481098721784063
+      0.573347406165057,
+      0.5973254086181278,
+      0.5490769141732739,
+      0.5581867973479389,
+      0.6096325182886909
     ]
   },
   "beta_verdadeiro": {
@@ -46,8 +46,8 @@
     36
   ],
   "limite_suporte_cox_anos": {
-    "eolica": 11.48667181027178,
-    "solar": 12.397363247632336
+    "eolica": 10.996391913928667,
+    "solar": 8.277362538332
   },
   "extrapolacao": "regressao Weibull por fonte além do último evento observado"
 }

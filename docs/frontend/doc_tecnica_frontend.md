@@ -289,7 +289,7 @@ O painel foi carregado no navegador contra o backend real (porta 8088) e verific
 | Previsão 24 h | Barras solar/eólica, subtítulo com modelo e RMSE ✅ |
 | Tabela e filtros | 25 de 308, filtros e "carregar mais" ✅ |
 | Página da usina (id=12) | Cadastro completo, 32,6 GWh em 360 horas, clima a 7 km, previsão com rateio de 0,55% ✅ |
-| Card de sobrevivência | Banner de simulado + barras 63% / 40% / 15% / 5% com cores por faixa ✅ |
+| Card de sobrevivência | Banner de simulado + barras de probabilidade com cores por faixa ✅ (os valores mudam a cada regeração dos dados simulados) |
 | Alternância de tema | Claro e escuro, com gráficos redesenhados ✅ |
 | Console | Nenhum erro ✅ |
 

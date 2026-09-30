@@ -10,8 +10,9 @@ Fluxo:
 3. compara os coeficientes entre si e com os valores verdadeiros do gerador;
 4. mostra o efeito do erro-padrão agrupado por usina;
 5. estima a **MCF** (manutenções acumuladas por usina) por fonte;
-6. **saída de produto**: manutenções esperadas por usina em 6, 12, 24 e 36 meses;
-7. salva o previsor em pickle e as tabelas em Parquet.
+6. estima a **fragilidade gama** por usina (heterogeneidade não observada);
+7. **saída de produto**: manutenções esperadas por usina em 6, 12, 24 e 36 meses;
+8. salva o previsor em pickle e as tabelas em Parquet.
 
 Uso:
     python -m ML.analise_sobrevivencia.treinar_recorrentes
@@ -85,8 +86,11 @@ def executar(horizontes=HORIZONTES_MESES, graficos: bool = True, salvar: bool = 
     comparacao = recorrentes.comparar(ajustes, meta.get("beta_verdadeiro"))
     erros_padrao = recorrentes.comparar_erros_padrao(painel)
 
-    # 2. MCF e produto --------------------------------------------------------
+    # 2. MCF e fragilidade ----------------------------------------------------
     mcf = recorrentes.funcao_media_cumulativa(painel)
+    frailty = recorrentes.estimar_frailty_gama(painel, mcf)
+
+    # 3. Produto --------------------------------------------------------------
     previsor = recorrentes.PrevisorRecorrencia(ajustes["andersen_gill"], mcf, horizontes, metadados={
         "treinado_em": datetime.now().isoformat(timespec="seconds"),
         "origem_treino": SAIDA_RECORRENTES.name,
@@ -98,6 +102,8 @@ def executar(horizontes=HORIZONTES_MESES, graficos: bool = True, salvar: bool = 
         "beta_verdadeiro": meta.get("beta_verdadeiro"),
         "gamma_recorrencia": meta.get("gamma_recorrencia"),
         "max_estrato_episodio": recorrentes.MAX_ESTRATO,
+        "frailty_theta_estimado": frailty["theta"],
+        "frailty_theta_verdadeiro": meta.get("variancia_frailty"),
         "horizontes_meses": list(horizontes),
         "aproximacao": "MCF da fonte x exp(beta_AG . x); multiplicador sobre média marginal",
     })
@@ -117,6 +123,25 @@ def executar(horizontes=HORIZONTES_MESES, graficos: bool = True, salvar: bool = 
         print(cobertura.to_string())
     print("\n=== Erro-padrão do AG: ingênuo x agrupado por usina ===")
     print(erros_padrao.round(4).to_string(index=False))
+    print("\n=== Fragilidade gama por usina ===")
+    verdadeiro = meta.get("variancia_frailty")
+    print(f"theta estimado = {frailty['theta']:.3f} "
+          f"(IC95 {frailty['ic_inferior']:.3f} a {frailty['ic_superior']:.3f})"
+          + (f" | theta amostral do gerador = {verdadeiro:.3f}" if verdadeiro else ""))
+    print(f"razao de verossimilhanca contra o Poisson (sem fragilidade) = "
+          f"{frailty['lr_vs_poisson']:.1f}")
+    por_usina = frailty["por_usina"]
+    if "frailty" in painel.columns:
+        real = painel.drop_duplicates("id_usina")[["id_usina", "frailty"]]
+        confere = por_usina.merge(real, on="id_usina")
+        print("correlacao entre a fragilidade estimada e a verdadeira: "
+              f"Pearson {confere['frailty_posterior'].corr(confere['frailty']):.2f}, "
+              f"Spearman {confere['frailty_posterior'].corr(confere['frailty'], method='spearman'):.2f}")
+    print("usinas mais frageis do que as covariaveis explicam:")
+    print(por_usina.nlargest(5, "frailty_posterior")
+          [["id_usina", "fonte", "eventos", "exposicao", "frailty_posterior"]]
+          .round(2).to_string(index=False))
+
     print("\n=== MCF por fonte (manutenções acumuladas por usina) ===")
     for fonte, grupo in mcf.groupby("fonte"):
         marcos = [(anos, float(grupo.loc[grupo["tempo_anos"] <= anos, "mcf"].max() or 0))
@@ -140,10 +165,12 @@ def executar(horizontes=HORIZONTES_MESES, graficos: bool = True, salvar: bool = 
         comparacao.to_parquet(MODELOS / "recorrentes_coeficientes.parquet", index=False)
         erros_padrao.to_parquet(MODELOS / "recorrentes_erros_padrao.parquet", index=False)
         mcf.to_parquet(MODELOS / "recorrentes_mcf.parquet", index=False)
+        frailty["por_usina"].to_parquet(MODELOS / "recorrentes_frailty_por_usina.parquet",
+                                        index=False)
         previsoes.to_parquet(MODELOS / "recorrentes_esperadas_por_usina.parquet", index=False)
 
     return {"ajustes": ajustes, "comparacao": comparacao, "erros_padrao": erros_padrao,
-            "mcf": mcf, "previsor": previsor, "previsoes": previsoes}
+            "mcf": mcf, "frailty": frailty, "previsor": previsor, "previsoes": previsoes}
 
 
 def main() -> None:

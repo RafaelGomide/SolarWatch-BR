@@ -195,6 +195,47 @@ Centralizar as covariáveis não muda os $\beta$, mas deixa $\lambda_f$ interpre
 
 ---
 
+### 5.1 Fragilidade (*frailty*) gama por usina
+
+O modelo acima dá a **mesma linha de base a todas as usinas da mesma fonte**: duas eólicas de 50 MW no Nordeste, entradas no mesmo ano, seriam estatisticamente idênticas. Não são. Fabricante do equipamento, qualidade da montagem, regime de operação e manutenção preventiva não estão no cadastro público — e explicam boa parte da diferença entre uma usina que quebra toda hora e a vizinha que não dá trabalho.
+
+O gerador representa isso com um fator aleatório por usina, multiplicando o risco:
+
+$$h(t \mid x, Z) = Z \cdot h_{0,\text{fonte}}(t) \cdot e^{\beta \cdot x}, \qquad Z \sim \text{Gama}(1/\theta,\ \theta)$$
+
+Na prática, `log Z` entra como um deslocamento do preditor linear, e a amostragem por inversão continua a mesma.
+
+**Por que gama.** É a escolha padrão em análise de sobrevivência por dois motivos: é conjugada com o processo de contagem, o que dá forma fechada para a fragilidade posterior de cada usina, e a mistura gama-Weibull produz distribuições marginais conhecidas. A parametrização usa média 1 e variância `theta`, então `Z` **não desloca o risco médio** — ele o espalha.
+
+**Por que `theta = 0,5`.** É o suficiente para a heterogeneidade ser visível sem dominar o sinal das covariáveis. Com esse valor, na geração atual:
+
+| | Valor |
+|---|---|
+| `Z` mediano | 0,84 |
+| Usinas com `Z < 0,8` | 47% |
+| Usinas com `Z > 2` (quebram o dobro do esperado) | 10% |
+| `Z` máximo | 5,12 |
+
+A assimetria é o ponto: a **maioria** das usinas é melhor que a média, e uma minoria puxa o total. É o que se observa em O&M real. `--variancia-frailty 0` desliga tudo (todo `Z = 1`).
+
+**`Z` é latente.** Ele aparece no arquivo como coluna `frailty` apenas porque o dado é simulado — serve para validar o estimador ([doc da análise §14.7](../ML/doc_tecnica_analise_sobrevivencia.md#147-fragilidade-gama-por-usina)). **Não é covariável do modelo:** num dado real ninguém observa `Z`; ele é exatamente aquilo que *não* se mede.
+
+**A mesma usina carrega o mesmo `Z` em todos os seus episódios** ([§9.1](#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)). É isso que torna a fragilidade estimável: ela vira correlação entre os episódios de uma mesma usina. Com um evento só por usina, `Z` seria indistinguível da aleatoriedade do próprio Weibull.
+
+#### O que a fragilidade faz com as estimativas
+
+Ligar a fragilidade muda os resultados de forma previsível, e as três mudanças são documentadas na doc da análise:
+
+| Efeito | Onde aparece |
+|---|---|
+| Coeficientes do Cox **atenuados** (0,159 contra 0,20 verdadeiro para potência) | as usinas frágeis falham cedo e saem do risco; sobra uma população selecionada |
+| A **log-logística passa a vencer** a Weibull por AIC | a mistura gama-Weibull tem cauda mais pesada que a Weibull pura |
+| A forma estimada cai para ρ ≈ 1,32 nas duas fontes | a mistura achata o risco agregado |
+
+Nenhuma delas é defeito: são as pistas que, num dado real, deveriam levantar a suspeita de que falta uma variável.
+
+---
+
 ## 6. Parâmetros escolhidos e justificativa
 
 > Os valores são **premissas plausíveis de ordem de grandeza**, escolhidas para gerar dados com comportamento realista. Não são estimativas calibradas em estudos publicados.
@@ -353,22 +394,24 @@ Invariantes verificados na geração atual:
 
 ### Perfil do conjunto gerado
 
-4.157 episódios de 1.854 usinas, com 2.303 eventos.
+4.116 episódios de 1.854 usinas, com 2.262 eventos.
 
 | Eventos na usina | Usinas |
 |---|---|
-| 0 | 836 |
-| 1 | 450 |
-| 2 a 3 | 402 |
-| 4 ou mais | 166 |
+| 0 | 938 |
+| 1 | 417 |
+| 2 a 3 | 326 |
+| 4 ou mais | 173 |
 
-Média de 1,24 evento por usina — 1,78 na eólica e 0,42 na solar. A deterioração aparece no encurtamento dos intervalos entre manutenções:
+Média de 1,22 evento por usina — 1,75 na eólica e 0,40 na solar. A cauda é mais longa do que seria sem fragilidade: uma usina chega a 22 manutenções, e são as usinas de `Z` alto que ocupam o topo. A deterioração aparece no encurtamento dos intervalos entre manutenções:
 
 | Episódio | 1 | 2 | 3 | 4 | 5 | 6 |
 |---|---|---|---|---|---|---|
-| Gap médio (anos) | 3,34 | 2,80 | 2,48 | 2,19 | 2,13 | 1,63 |
+| Gap médio (anos) | 3,38 | 2,69 | 2,35 | 1,90 | 1,73 | 1,41 |
 
-Há uma trava de segurança em 60 episódios por usina, que **não** foi atingida (o máximo observado é 20, numa eólica de 1998 com 27,7 anos de operação). Se fosse atingida, o processo daquela usina ficaria truncado sem o trecho censurado final, e um aviso é emitido no log.
+**A deterioração satura no 10º episódio** (`SATURACAO_DETERIORACAO`). Sem isso, uma usina antiga de fragilidade alta combinaria `Z = 5` com 20 reparos acumulados e produziria centenas de eventos — o gerador produziria, mas nenhuma operação real. Foi um problema concreto: na primeira versão com fragilidade, uma usina bateu na trava de 60 episódios.
+
+Há ainda a trava de segurança em 60 episódios por usina, que **não** é atingida na geração atual (o máximo é 22). Se fosse, o processo daquela usina ficaria truncado sem o trecho censurado final, e um aviso é emitido no log.
 
 ---
 
@@ -384,13 +427,14 @@ Junto ao parquet é gravado `eventos_manutencao_simulados.meta.json`:
   "seed": 42,
   "potencia_minima_mw": 1.0,
   "data_minima_entrada": "1990-01-01",
-  "modelo": "Weibull de riscos proporcionais, linha de base por fonte",
+  "modelo": "Weibull de riscos proporcionais com fragilidade gama por usina, linha de base por fonte",
+  "variancia_frailty": 0.536,
   "weibull_por_fonte": {"eolica": {"k": 1.6, "lambda_anos": 5.5}, "solar": {"k": 1.3, "lambda_anos": 7.0}},
   "beta_verdadeiro": {"log_potencia_mw_c": 0.2, "subsistema_NE": 0.25, "subsistema_S": 0.1, "subsistema_N": 0.15, "ano_entrada_c": -0.04},
   "referencias_centralizacao": {"potencia_mw": 30.0, "ano_entrada": 2018},
   "tipos_evento": { "...": "..." },
   "n_usinas": 1854,
-  "n_eventos": 1018
+  "n_eventos": 916
 }
 ```
 
@@ -408,9 +452,9 @@ Execução com `seed = 42`, sobre o bruto ANEEL de 18/09/2026.
 
 | Fonte | Usinas | Eventos | Censuradas | % censura | Potência mediana |
 |---|---|---|---|---|---|
-| Eólica | 1.123 | 807 | 316 | 28,1% | 29,7 MW |
-| Solar | 731 | 211 | 520 | 71,1% | 32,0 MW |
-| **Total** | **1.854** | **1.018** | **836** | **45,1%** | — |
+| Eólica | 1.123 | 733 | 390 | 34,7% | 29,7 MW |
+| Solar | 731 | 183 | 548 | 75,0% | 32,0 MW |
+| **Total** | **1.854** | **916** | **938** | **50,6%** | — |
 
 ### 11.2 Distribuição por subsistema
 
@@ -427,14 +471,14 @@ O parque eólico está quase todo no Nordeste. **Há só uma eólica no Sudeste/
 
 | Fonte | Mediana KM | $\hat S(5\ \text{anos})$ |
 |---|---|---|
-| Eólica | 3,7 anos | 0,36 |
-| Solar | 5,4 anos | 0,56 |
+| Eólica | 4,3 anos | 0,43 |
+| Solar | 6,6 anos | 0,59 |
 
 As medianas empíricas ficam abaixo das medianas da usina de referência ([§6.1](#61-linha-de-base-por-fonte-weibull)) porque a maior parte das usinas está no NE, cujo risco é maior.
 
 ### 11.4 Eventos por ano calendário
 
-Os eventos crescem com o tamanho do parque: poucos antes de 2012, cerca de 90 por ano entre 2019 e 2023, e 102 a 132 por ano em 2024–2026 (2026 até setembro).
+Os eventos crescem com o tamanho do parque: poucos antes de 2012, cerca de 75 por ano entre 2021 e 2023, e 97 a 127 por ano em 2024–2026 (2026 até setembro).
 
 ---
 
@@ -450,15 +494,15 @@ A estratificação dá a cada fonte seu próprio risco de base não paramétrico
 
 | Covariável | $\beta$ verdadeiro | $\hat\beta$ | IC 95% | Verdade no IC? |
 |---|---|---|---|---|
-| `log_potencia_mw_c` | 0,20 | 0,178 | [0,079; 0,277] | ✅ |
-| `subsistema_NE` | 0,25 | 0,046 | [−0,236; 0,329] | ✅ |
-| `subsistema_S` | 0,10 | 0,017 | [−0,339; 0,374] | ✅ |
-| `subsistema_N` | 0,15 | 0,286 | [−0,262; 0,835] | ✅ |
-| `ano_entrada_c` | −0,04 | −0,042 | [−0,062; −0,023] | ✅ |
+| `log_potencia_mw_c` | 0,20 | 0,159 | [0,055; 0,262] | ✅ |
+| `subsistema_NE` | 0,25 | 0,238 | [−0,066; 0,543] | ✅ |
+| `subsistema_S` | 0,10 | 0,015 | [−0,369; 0,399] | ✅ |
+| `subsistema_N` | 0,15 | 0,511 | [−0,061; 1,084] | ✅ |
+| `ano_entrada_c` | −0,04 | −0,040 | [−0,059; −0,020] | ✅ |
 
-C-index = 0,545. É baixo, e isso é esperado: os efeitos simulados são modestos e a maior parte da variação no tempo até a falha é aleatória (a parte Weibull), como na vida real.
+C-index = 0,549. É baixo, e isso é esperado: os efeitos simulados são modestos e a maior parte da variação no tempo até a falha é aleatória (a parte Weibull mais a fragilidade), como na vida real.
 
-**Os 5 valores verdadeiros estão dentro dos ICs de 95%.** Potência e ano de entrada são estimados com boa precisão. Os efeitos regionais têm ICs largos ([§12.3](#123-por-que-os-efeitos-regionais-são-imprecisos)).
+**Os 5 valores verdadeiros estão dentro dos ICs de 95%.** Duas ressalvas: os efeitos regionais têm ICs largos ([§12.3](#123-por-que-os-efeitos-regionais-são-imprecisos)), e o coeficiente de potência sai **abaixo** do verdadeiro (0,159 contra 0,20) porque o Cox sem fragilidade estima o efeito **marginal**, que é atenuado ([§5.1](#51-fragilidade-frailty-gama-por-usina)). Estar dentro do IC não é o mesmo que estar sem viés.
 
 ### 12.2 Weibull AFT por fonte (recupera $k$)
 
@@ -466,17 +510,19 @@ Ajustando uma regressão Weibull AFT separada para cada fonte, com as mesmas cov
 
 | Fonte | $k$ verdadeiro | $\hat k$ (AFT) | $\hat k$ (Weibull marginal, sem covariáveis) |
 |---|---|---|---|
-| Eólica | 1,6 | 1,56 | 1,59 |
-| Solar | 1,3 | 1,43 | 1,49 |
+| Eólica | 1,6 | 1,30 | 1,32 |
+| Solar | 1,3 | 1,30 | 1,32 |
 
-A forma é bem recuperada nas eólicas. Nas solares, a estimativa fica um pouco acima com 71% de censura e só 211 eventos, dentro do esperado para essa quantidade de informação.
+As duas fontes convergem para $\hat k \approx 1{,}3$, e a eólica fica claramente abaixo do seu valor verdadeiro (1,6). **É efeito da fragilidade**, não falta de dado: a mistura gama-Weibull tem risco agregado mais achatado que a Weibull que a gerou, porque as usinas frágeis falham cedo e a população sobrevivente vai ficando seletivamente mais robusta. A solar, cujo $k$ verdadeiro já era 1,3, sofre menos porque parte do efeito se confunde com o valor real.
+
+O sinal de que falta uma variável está aí: o modelo paramétrico que melhor descreve os dados deixou de ser a Weibull e passou a ser a log-logística ([doc da análise §6](../ML/doc_tecnica_analise_sobrevivencia.md#6-ajuste-paramétrico)).
 
 Relação PH ↔ AFT no Weibull, usada para comparar: $\beta_{PH} = -\,k \cdot \beta_{AFT}$.
 
 ### 12.3 Por que os efeitos regionais são imprecisos
 
-- Entre as **eólicas**, a categoria de referência (SE) tem **uma única usina**. Dentro desse estrato, o contraste NE × SE praticamente não é identificável. No AFT só com eólicas, o intercepto ($\hat\lambda = 3{,}35$ anos, contra 5,5 verdadeiros) fica "ancorado" nessa única usina, e os coeficientes regionais compensam. A escala efetiva estimada no NE ($\approx 4{,}9$ anos) bate com a verdadeira ($5{,}5 \cdot e^{-0{,}25/1{,}6} \approx 4{,}7$ anos).
-- Na prática, os efeitos regionais são estimados **quase só pelas solares** (324 no SE, 362 no NE), que têm poucos eventos.
+- Entre as **eólicas**, a categoria de referência (SE) tem **uma única usina**. Dentro desse estrato, o contraste NE × SE praticamente não é identificável. No AFT só com eólicas, o intercepto ($\hat\lambda = 3{,}29$ anos, contra 5,5 verdadeiros) fica "ancorado" nessa única usina, e os coeficientes regionais compensam. A escala efetiva estimada no NE ($\approx 5{,}9$ anos) fica acima da verdadeira ($5{,}5 \cdot e^{-0{,}25/1{,}6} \approx 4{,}7$ anos) — a fragilidade alonga a cauda e empurra a escala marginal para cima.
+- Na prática, os efeitos regionais são estimados **quase só pelas solares** (324 no SE, 362 no NE), que têm poucos eventos (183 no total).
 - O subsistema N tem só 24 usinas.
 
 Isso **não é defeito da simulação**, e sim reflexo da geografia real do parque. É uma lição útil para a modelagem real: com essa distribuição, não é possível estimar bem efeitos regionais para eólicas.
@@ -554,7 +600,7 @@ cph.predict_median(novas)                                   # tempo mediano até
 | 1 | **Os eventos são sintéticos** | Nenhuma conclusão sobre confiabilidade real | Sempre rotular como simulado na API/frontend e trocar por dado real se houver. Um caminho já preparado: a ingestão passou a arquivar retratos datados da ANEEL (`historico_aneel/`, ver `doc_tecnica_ingestao.md` §8.5), e a transição de fase `Construção` → `Operação` entre dois retratos é um **evento real com data observada** |
 | 2 | ~~**Só o 1º evento** por usina~~ **Resolvido:** o gerador produz também o processo completo em `eventos_manutencao_recorrentes.parquet` ([§9.1](#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)), e a análise ajusta Andersen-Gill e PWP ([doc da análise §14](../ML/doc_tecnica_analise_sobrevivencia.md#14-eventos-recorrentes-andersen-gill-e-pwp)) | Resta: o produto servido pela API ainda é o de 1º evento | Expor as manutenções esperadas como segundo card/endpoint |
 | 3 | `tipo_evento` independente do tempo | Não serve para riscos competitivos (Fine-Gray, cause-specific) | Gerar um tempo latente por causa e observar o mínimo |
-| 4 | Linha de base igual para todas as usinas da mesma fonte | Não há efeito de fabricante/modelo de equipamento, que não está no cadastro público | Adicionar fragilidade (*frailty*) gama por usina ou por grupo |
+| 4 | ~~Linha de base igual para todas as usinas da mesma fonte~~ **Resolvido:** fragilidade gama por usina, com `theta = 0,5` ([§5.1](#51-fragilidade-frailty-gama-por-usina)) | Resta: os modelos ajustados não incluem a fragilidade, então estimam efeitos marginais atenuados | Estimador via binomial negativa já implementado ([doc da análise §14.7](../ML/doc_tecnica_analise_sobrevivencia.md#147-fragilidade-gama-por-usina)); falta um Cox com fragilidade compartilhada |
 | 5 | Efeitos das covariáveis constantes no tempo | Hipótese PH vale por construção dentro da fonte | Para testar diagnósticos, gerar uma variante com efeito tempo-dependente |
 | 6 | Censura apenas administrativa | Não há perda de acompanhamento nem descomissionamento | Adicionar censura aleatória exponencial independente |
 | 7 | População = usinas **hoje** em operação | Usinas já descomissionadas não aparecem (viés de sobrevivente no cadastro) | Pequeno para UFV/EOL, parque jovem; documentado |

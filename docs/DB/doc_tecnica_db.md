@@ -255,7 +255,7 @@ CREATE TABLE fato_manutencao (
 );
 ```
 
-Formato padrão de análise de sobrevivência: `tempo_dias` é o tempo até o evento **ou** até a censura, e `evento_ocorreu` distingue os dois casos (134 eventos e 25 censuras). A coluna `simulado`, sempre `true`, existe para que a API consiga avisar no payload que o dado é sintético.
+Formato padrão de análise de sobrevivência: `tempo_dias` é o tempo até o evento **ou** até a censura, e `evento_ocorreu` distingue os dois casos (135 eventos e 24 censuras). A coluna `simulado`, sempre `true`, existe para que a API consiga avisar no payload que o dado é sintético.
 
 ### 6.5 `ponte_usina_aneel` — 790 linhas
 

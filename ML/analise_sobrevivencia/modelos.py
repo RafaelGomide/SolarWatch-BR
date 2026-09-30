@@ -108,10 +108,30 @@ def ajustar_weibull_regressao(df: pd.DataFrame) -> dict:
     return ajustes
 
 
-def limites_de_suporte(df: pd.DataFrame) -> dict:
-    """Último tempo COM EVENTO em cada estrato: além disso o Cox extrapola."""
-    com_evento = df[df[EVENTO] == 1]
-    return com_evento.groupby(ESTRATO)[TEMPO].max().astype(float).to_dict()
+MINIMO_EM_RISCO = 20
+
+
+def limites_de_suporte(df: pd.DataFrame, minimo_em_risco: int = MINIMO_EM_RISCO) -> dict:
+    """Até onde a linha de base do Cox é confiável, por estrato.
+
+    Não basta pegar o último tempo COM EVENTO: entre 12 e 15 anos o parque
+    eólico tem 6, 3 e 2 usinas em risco, e a linha de base fica **plana** nesse
+    trecho mesmo havendo um evento isolado lá na frente. Uma usina de 12 anos
+    caía justamente aí e voltava a dar `P = 1,00` — o mesmo sintoma que a
+    extrapolação Weibull existe para corrigir.
+
+    O limite é o último tempo com evento que ainda tem `minimo_em_risco`
+    unidades sob observação. Além dele, o previsor usa a regressão Weibull.
+    """
+    limites = {}
+    for estrato, grupo in df.groupby(ESTRATO):
+        tempos = grupo[TEMPO].to_numpy()
+        com_evento = np.sort(grupo.loc[grupo[EVENTO] == 1, TEMPO].to_numpy())
+        suportados = [t for t in com_evento if (tempos >= t).sum() >= minimo_em_risco]
+        limites[str(estrato)] = float(max(suportados)) if suportados else float(com_evento.min())
+    log.info("[cox] limite de suporte (>= %d em risco): %s", minimo_em_risco,
+             {k: round(v, 2) for k, v in limites.items()})
+    return limites
 
 
 # ------------------------------------------------------------------- Previsor

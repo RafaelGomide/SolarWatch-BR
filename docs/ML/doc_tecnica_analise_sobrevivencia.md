@@ -88,7 +88,7 @@ python -m ML.analise_sobrevivencia.treinar_recorrentes   # eventos recorrentes (
 `dados/simulados/eventos_manutencao_simulados.parquet`: **1.854 usinas** da ANEEL (solar e eólica, em operação, ≥ 1 MW), com:
 
 - `tempo_anos`: tempo até o primeiro evento **ou** até o fim da observação;
-- `evento`: 1 = manutenção observada (**1.018**), 0 = censura (**836**, 45%).
+- `evento`: 1 = manutenção observada (**916**), 0 = censura (**938**, 51%).
 
 A carga passa por `ds_toolkit.preparar_sobrevivencia`, que valida os invariantes: tempo positivo, evento em {0,1} e consistência entre evento e data.
 
@@ -123,10 +123,10 @@ Estimador não paramétrico da curva de sobrevivência, via `ds_toolkit.kaplan_m
 
 | Fonte | n | Eventos | Mediana | IC 95% |
 |---|---|---|---|---|
-| eólica | 1.123 | 807 | **3,73 anos** | 3,56 – 3,97 |
-| solar | 731 | 211 | **5,35 anos** | 4,97 – 6,13 |
+| eólica | 1.123 | 733 | **4,26 anos** | 3,97 – 4,65 |
+| solar | 731 | 183 | **6,56 anos** | 5,43 – 8,23 |
 
-**Log-rank: p = 4,7 × 10⁻¹²** — as curvas diferem de forma clara.
+**Log-rank: p = 3,0 × 10⁻¹⁰** — as curvas diferem de forma clara.
 
 Como ler o gráfico:
 
@@ -142,20 +142,22 @@ Quatro famílias ajustadas por fonte e comparadas por AIC (menor = melhor equil�
 
 | Fonte | Modelo | AIC | ΔAIC | Parâmetros | Mediana prevista |
 |---|---|---|---|---|---|
-| eólica | **weibull** | 3.975,1 | 0,0 | λ=4,84 ρ=**1,59** | 3,85 anos |
-| eólica | loglogistico | 4.042,4 | 67,3 | α=3,67 β=2,10 | 3,67 |
-| eólica | lognormal | 4.113,0 | 137,9 | μ=1,26 σ=0,89 | 3,53 |
-| eólica | exponencial | 4.197,7 | 222,6 | λ=4,95 | 3,43 |
-| solar | **weibull** | 1.320,6 | 0,0 | λ=6,92 ρ=**1,49** | 5,41 anos |
-| solar | loglogistico | 1.329,2 | 8,6 | α=5,51 β=1,72 | 5,51 |
-| solar | lognormal | 1.357,0 | 36,4 | μ=1,80 σ=1,16 | 6,04 |
-| solar | exponencial | 1.365,4 | 44,8 | λ=9,31 | 6,45 |
+| eólica | **loglogistico** | 4.038,7 | 0,0 | α=4,16 β=**1,75** | 4,16 anos |
+| eólica | weibull | 4.038,8 | 0,1 | λ=5,89 ρ=**1,32** | 4,54 |
+| eólica | lognormal | 4.072,0 | 33,3 | μ=1,41 σ=1,03 | 4,10 |
+| eólica | exponencial | 4.114,7 | 76,1 | λ=6,08 | 4,22 |
+| solar | **loglogistico** | 1.231,1 | 0,0 | α=6,69 β=**1,51** | 6,69 anos |
+| solar | weibull | 1.232,2 | 1,2 | λ=8,65 ρ=**1,32** | 6,67 |
+| solar | lognormal | 1.248,7 | 17,6 | μ=2,03 σ=1,32 | 7,65 |
+| solar | exponencial | 1.250,1 | 19,0 | λ=11,13 | 7,72 |
 
-**A Weibull vence nas duas fontes**, e por margem larga na eólica (ΔAIC de 67 para a segunda). Diferença de AIC acima de 10 já é considerada forte; acima de 2, relevante.
+**A log-logística passou a vencer nas duas fontes** — e isso *não* é um acidente. Os dados são gerados por uma Weibull, mas com **fragilidade gama por usina** ([doc dos dados simulados §5.1](../ingestao/doc_tecnica_dados_simulados.md#51-fragilidade-frailty-gama-por-usina)). A mistura de Weibulls por um fator gama é justamente o que produz uma cauda mais pesada e um risco que cresce e depois desacelera — a forma característica da log-logística.
 
-Interpretação do parâmetro de forma (ρ): **1,59 na eólica e 1,49 na solar, ambos > 1**, ou seja, **risco crescente com a idade** — desgaste, não mortalidade infantil. A exponencial (risco constante) é a pior colocada nas duas fontes, o que confirma que a taxa de manutenção não é constante no tempo.
+A diferença é mínima (ΔAIC de 0,1 na eólica e 1,2 na solar), ou seja, **as duas famílias descrevem os dados igualmente bem**; o que importa é o que a inversão de ranking revela. Antes da fragilidade, a Weibull vencia com folga (ΔAIC de 67 para a segunda). A heterogeneidade não observada deixa marca na forma da distribuição agregada, e é exatamente esse tipo de pista que, num dado real, deveria levantar a suspeita de que falta uma variável.
 
-> Esse resultado é a validação do método: os dados foram gerados por uma Weibull com formas 1,6 (eólica) e 1,3 (solar), e o AIC escolheu a família certa, com formas estimadas de 1,59 e 1,49. O desvio maior na solar vem dos 71% de censura.
+Interpretação do parâmetro de forma da Weibull (ρ): **1,32 nas duas fontes, > 1**, ou seja, **risco crescente com a idade** — desgaste, não mortalidade infantil. A exponencial (risco constante) continua sendo a pior colocada.
+
+> O ρ estimado (1,32 nas duas) fica **abaixo** dos valores do gerador (1,6 na eólica, 1,3 na solar), o que também é efeito da fragilidade: a mistura achata o risco agregado, porque as usinas frágeis falham cedo e sobram as robustas. É o mesmo mecanismo que atenua os coeficientes do Cox ([§7.2](#72-coeficientes)).
 
 ---
 
@@ -175,21 +177,23 @@ CoxPHFitter().fit(dados, duration_col="tempo_anos", event_col="evento", strata=[
 
 | Covariável | coef | Hazard ratio | IC 95% (coef) | p |
 |---|---|---|---|---|
-| `log_potencia_mw_c` | **0,178** | **1,19** | 0,079 – 0,277 | 0,0004 |
-| `ano_entrada_c` | **−0,043** | **0,96** | −0,062 – −0,024 | < 0,0001 |
-| `subsistema_N` | 0,286 | 1,33 | −0,262 – 0,835 | 0,31 |
-| `subsistema_NE` | 0,046 | 1,05 | −0,236 – 0,329 | 0,75 |
-| `subsistema_S` | 0,017 | 1,02 | −0,339 – 0,374 | 0,92 |
+| `log_potencia_mw_c` | **0,159** | **1,17** | 0,055 – 0,262 | 0,003 |
+| `ano_entrada_c` | **−0,040** | **0,96** | −0,059 – −0,020 | 0,0001 |
+| `subsistema_N` | 0,511 | 1,67 | −0,061 – 1,084 | 0,08 |
+| `subsistema_NE` | 0,238 | 1,27 | −0,066 – 0,543 | 0,12 |
+| `subsistema_S` | 0,015 | 1,02 | −0,369 – 0,399 | 0,94 |
 
 Leitura prática:
 
-- **Potência:** cada unidade de ln(MW) aumenta o risco em 19%. Dobrar a potência (ln 2 = 0,69) multiplica o risco por 1,13, ou seja, **+13%**. Faz sentido: mais equipamento, mais pontos de falha.
-- **Coorte:** cada ano mais nova reduz o risco em **4%**. Uma usina de 2024 tem ~22% menos risco que uma de 2018.
+- **Potência:** cada unidade de ln(MW) aumenta o risco em 17%. Dobrar a potência (ln 2 = 0,69) multiplica o risco por 1,11, ou seja, **+11%**. Faz sentido: mais equipamento, mais pontos de falha.
+- **Coorte:** cada ano mais nova reduz o risco em **4%**. Uma usina de 2024 tem ~21% menos risco que uma de 2018.
 - **Região:** nenhum efeito significativo. Isso **não** quer dizer que região não importe — o intervalo é largo demais para concluir qualquer coisa. Ver [§8.3](#83-recuperação-dos-parâmetros-verdadeiros).
+
+**Os coeficientes estão atenuados de propósito.** O gerador usa 0,20 para `log_potencia_mw_c` e o Cox devolve 0,159. Não é erro de ajuste: com **fragilidade** não observada, o modelo marginal tem coeficientes menores em módulo que o condicional — as usinas frágeis falham cedo e saem do conjunto de risco, e o que resta é uma população cada vez mais selecionada. Quem quiser o efeito condicional precisa modelar a fragilidade ([§14.7](#147-fragilidade-gama-por-usina)).
 
 ### 7.3 O Cox ingênuo e o limite do teste de premissa
 
-O código também ajusta, para comparação, um Cox com `fonte` como covariável comum (`ajustar_cox_ingenuo`), onde a premissa é violada **por construção**. Resultado: HR de 1,40 para eólica, e o **teste de Schoenfeld não acusou nada** (p > 0,05 em todas as covariáveis).
+O código também ajusta, para comparação, um Cox com `fonte` como covariável comum (`ajustar_cox_ingenuo`), onde a premissa é violada **por construção**. Resultado: HR de 1,32 para eólica, e o **teste de Schoenfeld não acusou nada** (p > 0,05 em todas as covariáveis).
 
 Essa é uma lição que vale registrar: **"o teste passou" não prova que a premissa vale.** As duas formas Weibull (1,3 e 1,6) são próximas o bastante para o teste não ter poder de distinguir na janela observada. A estratificação aqui se justifica pelo que se sabe do processo gerador, não pelo resultado do teste. Com dado real, sem conhecer o gerador, o caminho seria olhar também os resíduos de Schoenfeld no tempo e as curvas log(−log S).
 
@@ -202,10 +206,10 @@ Essa é uma lição que vale registrar: **"o teste passou" não prova que a prem
 | Métrica | Valor |
 |---|---|
 | C-index no treino | 0,545 |
-| **C-index 5-fold (fora da amostra)** | **0,567 ± 0,022** |
+| **C-index 5-fold (fora da amostra)** | **0,578 ± 0,023** |
 | Folds | 0,594 · 0,576 · 0,581 · 0,534 · 0,548 |
 
-O C-index mede se o modelo ordena corretamente quem falha antes (0,5 = aleatório; > 0,7 = bom). **0,567 é baixo**, e isso é esperado: no gerador, os efeitos das covariáveis são modestos e a maior parte da variação do tempo até falha é aleatória (a componente Weibull). Nenhum modelo poderia ir muito além disso nesses dados — o teto é imposto pelo processo, não pelo método.
+O C-index mede se o modelo ordena corretamente quem falha antes (0,5 = aleatório; > 0,7 = bom). **0,578 é baixo**, e isso é esperado: no gerador, os efeitos das covariáveis são modestos e a maior parte da variação do tempo até falha é aleatória (a componente Weibull). Nenhum modelo poderia ir muito além disso nesses dados — o teto é imposto pelo processo, não pelo método.
 
 O C-index fora da amostra ficou **acima** do de treino, o que é possível com efeitos fracos e é sinal de que não há overfitting (são 169 eventos por covariável, muito acima da regra prática de 10).
 
@@ -227,13 +231,16 @@ Por serem dados simulados, dá para perguntar o que nunca se pode perguntar com 
 
 | Covariável | Verdadeiro | Estimado | IC 95% | Dentro do IC |
 |---|---|---|---|---|
-| `log_potencia_mw_c` | 0,20 | 0,178 | 0,079 – 0,277 | ✅ |
-| `ano_entrada_c` | −0,04 | −0,043 | −0,062 – −0,024 | ✅ |
-| `subsistema_NE` | 0,25 | 0,046 | −0,236 – 0,329 | ✅ |
-| `subsistema_S` | 0,10 | 0,017 | −0,339 – 0,374 | ✅ |
-| `subsistema_N` | 0,15 | 0,286 | −0,262 – 0,835 | ✅ |
+| `log_potencia_mw_c` | 0,20 | 0,159 | 0,055 – 0,262 | ✅ |
+| `ano_entrada_c` | −0,04 | −0,040 | −0,059 – −0,020 | ✅ |
+| `subsistema_NE` | 0,25 | 0,238 | −0,066 – 0,543 | ✅ |
+| `subsistema_S` | 0,10 | 0,015 | −0,369 – 0,399 | ✅ |
+| `subsistema_N` | 0,15 | 0,511 | −0,061 – 1,084 | ✅ |
 
-**Os 5 valores verdadeiros caem dentro dos ICs.** Potência e coorte são estimados com precisão; os efeitos regionais têm ICs largos e estimativas pontuais distantes da verdade, porque 74% das usinas estão no Nordeste e só 24 estão no Norte. A geografia real do parque limita o que dá para estimar, e isso apareceria igual em dado real.
+**Os 5 valores verdadeiros caem dentro dos ICs.** Duas ressalvas honestas:
+
+- Os efeitos regionais têm ICs largos e estimativas pontuais distantes da verdade, porque 74% das usinas estão no Nordeste e só 24 estão no Norte. A geografia real do parque limita o que dá para estimar, e isso apareceria igual em dado real.
+- `log_potencia_mw_c` é estimado **abaixo** do verdadeiro (0,159 contra 0,20). Com fragilidade não observada, o coeficiente marginal é atenuado por construção ([§7.2](#72-coeficientes)); "cair dentro do IC" aqui não é o mesmo que "sem viés".
 
 ### 8.4 Calibração
 
@@ -241,9 +248,9 @@ Discriminação responde "ordena certo?". Calibração responde "**o número est
 
 | Grupo de risco | n | 1 ano | 2 anos | 3 anos |
 |---|---|---|---|---|
-| g1 (menor risco) | 620 | 0,950 vs 0,957 | 0,857 vs 0,849 | 0,757 vs 0,766 |
-| g2 | 616 | 0,931 vs 0,940 | 0,814 vs 0,832 | 0,682 vs 0,662 |
-| g3 (maior risco) | 618 | 0,909 vs 0,893 | 0,766 vs 0,751 | 0,603 vs 0,612 |
+| g1 (menor risco) | 618 | 0,951 vs 0,945 | 0,870 vs 0,877 | 0,780 vs 0,758 |
+| g2 | 619 | 0,928 vs 0,938 | 0,812 vs 0,821 | 0,682 vs 0,682 |
+| g3 (maior risco) | 617 | 0,910 vs 0,903 | 0,767 vs 0,750 | 0,613 vs 0,616 |
 
 *(previsto vs observado)*
 
@@ -269,22 +276,25 @@ onde `t₀ = idade_anos` (hoje − data de operação) e `S` é a curva prevista
 
 93 usinas, com horizontes de 6, 12, 24 e 36 meses:
 
-| Fonte | Método | n | Idade média | P(12 meses) média | Risco relativo médio |
+| Fonte | Método | n | Idade mediana | P(12 meses) média | Risco relativo médio |
 |---|---|---|---|---|---|
-| eólica | cox | 30 | 5,9 anos | 0,64 | 1,46 |
-| eólica | weibull | 21 | 14,1 anos | 0,42 | 1,82 |
-| solar | cox | 42 | 4,5 anos | 0,86 | 1,30 |
+| eólica | cox | 29 | 4,9 anos | 0,77 | 1,46 |
+| eólica | weibull | 22 | 12,7 anos | 0,69 | 1,77 |
+| solar | cox | 34 | 3,4 anos | 0,86 | 1,20 |
+| solar | weibull | 8 | 8,8 anos | 0,77 | 1,42 |
 
 Distribuição geral das probabilidades:
 
 | | 6 meses | 12 meses | 24 meses | 36 meses |
 |---|---|---|---|---|
-| média | 0,82 | 0,69 | 0,48 | 0,32 |
-| mediana | 0,85 | 0,72 | 0,47 | 0,29 |
-| mínimo | 0,35 | 0,12 | 0,01 | 0,00 |
-| máximo | 1,00 | 1,00 | 1,00 | 0,91 |
+| média | 0,88 | 0,78 | 0,61 | 0,50 |
+| mediana | 0,89 | 0,78 | 0,62 | 0,49 |
+| mínimo | 0,72 | 0,51 | 0,26 | 0,13 |
+| máximo | 0,98 | 0,93 | 0,86 | 0,78 |
 
-O tempo mediano previsto até manutenção vai de 2,1 a 7,1 anos, com mediana de 3,6.
+O tempo mediano previsto até manutenção vai de 2,2 a 8,3 anos, com mediana de 4,0.
+
+Duas observações sobre o efeito da fragilidade aqui. As probabilidades **subiram** em relação à versão sem ela (a média de 12 meses da eólica era 0,55): com variância 0,5, a usina mediana tem `Z = 0,84`, ou seja, é *menos* frágil que a média — a cauda de usinas problemáticas puxa o risco médio para cima, mas a maioria fica abaixo dele. E **nenhuma usina chega a 1,00** em nenhum horizonte, o que é o sintoma que a [§10](#10-o-bug-da-extrapolação-e-como-foi-resolvido) trata.
 
 ### 9.3 Colunas do arquivo
 
@@ -309,13 +319,29 @@ O tempo mediano previsto até manutenção vai de 2,1 a 7,1 anos, com mediana de
 
 **Causa:** o Cox é **semiparamétrico**. Sua linha de base é estimada a partir dos eventos observados e, depois do **último evento** de cada estrato, ela fica **plana** — o modelo não tem informação ali. Para uma usina com idade além desse ponto, S(t₀) e S(t₀+N) caem na região plana, e a razão S(t₀+N)/S(t₀) vale exatamente 1.
 
-Os limites medidos: **11,49 anos** na eólica e **12,40 anos** na solar.
+Os limites medidos: **16,79 anos** na eólica e **8,95 anos** na solar.
 
 **Correção:** dentro do suporte, o cálculo usa o Cox; **além dele, usa uma regressão Weibull** (`WeibullAFTFitter`, uma por fonte, com as mesmas covariáveis), que é paramétrica e continua decaindo de forma suave — o comportamento fisicamente esperado de um ativo que envelhece. A coluna `metodo_extrapolacao` marca qual foi usado.
 
-**Efeito:** 21 das 93 usinas (todas eólicas antigas) passaram a usar Weibull. A média de P(12 meses) da eólica caiu de 0,79 para 0,55, e a Taíba (27,8 anos de operação) saiu de 1,00 para **0,12**.
+**Efeito:** 30 das 93 usinas (22 eólicas e 8 solares, as mais antigas) usam a extrapolação Weibull. A Taíba, com 27,8 anos de operação, sairia com 1,00 pelo Cox e sai com **0,51** em 12 meses e **0,13** em 36.
 
-Essa correção também aproveita o modelo paramétrico da [§6](#6-ajuste-paramétrico) no produto, e não só na comparação: a Weibull ganhou por AIC, então é a extrapoladora natural.
+Essa correção também aproveita o modelo paramétrico da [§6](#6-ajuste-paramétrico) no produto, e não só na comparação.
+
+### 10.1 A reincidência: "último evento" não é suporte
+
+Ao regerar os dados com fragilidade, o mesmo sintoma **voltou**: o `CONJUNTO EOLICO CAETITE NORTE`, agora com 11,99 anos, saía de novo com `1,00` em todos os horizontes — apesar da correção acima estar no lugar.
+
+O motivo é sutil. O limite de suporte era o **último tempo com evento** do estrato, e com a fragilidade esse último evento foi para 16,79 anos na eólica. Como 11,99 < 16,79, a usina era considerada dentro do suporte e usava o Cox. Só que o conjunto de risco naquela faixa é minúsculo:
+
+| Anos | 10 | 11 | 12 | 13 | 14 | 15 |
+|---|---|---|---|---|---|---|
+| Eólicas em risco | 55 | 21 | 6 | 3 | 2 | 1 |
+
+Com 6 usinas em risco aos 12 anos e o evento seguinte só lá na frente, a linha de base fica **plana** de 11,99 a 14,99 — e `S(t₀+N)/S(t₀)` volta a valer exatamente 1. Um único evento isolado na cauda "estende" o suporte formalmente sem sustentar nada.
+
+**Correção:** o limite passou a ser o último tempo com evento que ainda tenha **pelo menos 20 unidades em risco** (`MINIMO_EM_RISCO`). Os limites caíram de 16,79 para **11,00 anos** na eólica e de 8,95 para **8,28** na solar, e as usinas que usam Weibull passaram de 6 para 30. O Caetité Norte agora sai com **0,675** em 12 meses, e a probabilidade máxima entre as 93 usinas é 0,93 — nenhum 1,00 sobrou.
+
+A lição: "há um evento depois deste tempo" é um critério de suporte fraco. O que sustenta uma linha de base não paramétrica é **massa de dados**, não a existência de uma observação.
 
 ---
 
@@ -376,7 +402,7 @@ Para a API, o caminho é carregar o pickle na inicialização do processo e cham
 
 Tudo até aqui modela **o 1º evento**: depois da primeira manutenção a usina sai do conjunto de risco, como se tivesse deixado de existir. É uma simplificação forte para um ativo que é reparado e volta a operar — e apaga o caso mais interessante, o da usina que já quebrou várias vezes.
 
-`recorrentes.py` trabalha sobre o painel de episódios ([doc dos dados simulados §9.1](../ingestao/doc_tecnica_dados_simulados.md#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)): uma linha por intervalo `(t_inicio, t_fim]`, 4.157 episódios de 1.854 usinas, 2.303 eventos.
+`recorrentes.py` trabalha sobre o painel de episódios ([doc dos dados simulados §9.1](../ingestao/doc_tecnica_dados_simulados.md#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)): uma linha por intervalo `(t_inicio, t_fim]`, 4.116 episódios de 1.854 usinas, 2.262 eventos.
 
 ### 14.1 Os três modelos
 
@@ -392,17 +418,17 @@ Como o gerador destes dados **reinicia o relógio** a cada reparo e piora o risc
 
 ### 14.2 Erro-padrão agrupado por usina
 
-As linhas de uma mesma usina não são independentes: uma usina propensa a falhar contribui com vários episódios. Sem agrupar, o modelo trata 4.157 episódios como 4.157 observações independentes, quando são 1.854 usinas.
+As linhas de uma mesma usina não são independentes: uma usina propensa a falhar contribui com vários episódios. Sem agrupar, o modelo trata 4.116 episódios como 4.116 observações independentes, quando são 1.854 usinas.
 
 | Covariável | SE ingênuo | SE agrupado | Razão |
 |---|---|---|---|
-| `log_potencia_mw_c` | 0,034 | 0,068 | **2,0×** |
-| `ano_entrada_c` | 0,007 | 0,030 | **4,4×** |
-| `subsistema_NE` | 0,117 | 0,092 | 0,78× |
-| `subsistema_S` | 0,135 | 0,167 | 1,24× |
-| `subsistema_N` | 0,214 | 0,153 | 0,72× |
+| `log_potencia_mw_c` | 0,033 | 0,055 | **1,7×** |
+| `ano_entrada_c` | 0,007 | 0,033 | **4,7×** |
+| `subsistema_NE` | 0,125 | 0,109 | 0,87× |
+| `subsistema_S` | 0,141 | 0,179 | 1,27× |
+| `subsistema_N` | 0,215 | 0,179 | 0,83× |
 
-Nas duas covariáveis contínuas — as que variam dentro da usina ao longo dos episódios — o erro-padrão ingênuo é **2 a 4 vezes menor** que o correto. Um IC construído com ele daria significância a quase tudo. Nas dummies de subsistema a razão fica perto de 1 e às vezes abaixo, o que é esperado: o sanduíche robusto não é uniformemente maior, só é o estimador certo.
+Nas duas covariáveis contínuas — as que variam dentro da usina ao longo dos episódios — o erro-padrão ingênuo é **1,7 a 4,7 vezes menor** que o correto. A distorção cresceu com a fragilidade, como era de esperar: é ela que cria a correlação entre os episódios de uma mesma usina. Um IC construído com ele daria significância a quase tudo. Nas dummies de subsistema a razão fica perto de 1 e às vezes abaixo, o que é esperado: o sanduíche robusto não é uniformemente maior, só é o estimador certo.
 
 Detalhe de implementação: o `CoxTimeVaryingFitter` do lifelines 0.30 ainda **não implementa** `robust=True` (levanta `NotImplementedError`). Os modelos de processo de contagem são ajustados com `CoxPHFitter` usando `entry_col` (entrada tardia) e `cluster_col`, que dá o mesmo modelo com o erro-padrão agrupado.
 
@@ -412,18 +438,18 @@ Como o dado é simulado, dá para perguntar se cada modelo acerta os $\beta$ do 
 
 | Covariável | Verdadeiro | AG | PWP tempo total | PWP gap time |
 |---|---|---|---|---|
-| `log_potencia_mw_c` | 0,20 | 0,169 | 0,195 | 0,179 |
-| `ano_entrada_c` | −0,04 | −0,040 | −0,047 | −0,050 |
-| `subsistema_NE` | 0,25 | 0,115 | 0,090 | 0,123 |
-| `subsistema_N` | 0,15 | 0,123 | 0,131 | 0,119 |
-| `subsistema_S` | 0,10 | −0,135 | −0,174 | −0,176 |
-| **Cobertura dos IC 95%** | | **100%** | **100%** | **80%** |
+| `log_potencia_mw_c` | 0,20 | 0,110 | 0,100 | 0,086 |
+| `ano_entrada_c` | −0,04 | −0,034 | −0,030 | −0,016 |
+| `subsistema_NE` | 0,25 | 0,340 | 0,310 | 0,316 |
+| `subsistema_N` | 0,15 | 0,389 | 0,352 | 0,380 |
+| `subsistema_S` | 0,10 | 0,067 | 0,072 | 0,028 |
+| **Cobertura dos IC 95%** | | **100%** | **80%** | **60%** |
 
 Três leituras:
 
-1. **O AG cobre tudo, mas por ser vago.** Seus ICs são os mais largos (SE de 0,068 contra 0,034 do PWP gap time em `log_potencia_mw_c`), então cobrir o valor verdadeiro custa pouco. Os pontos estimados são os mais atenuados — `subsistema_NE` sai em 0,115 contra 0,25 verdadeiro.
-2. **O PWP gap time é o mais preciso e o único que erra um IC.** Estimativas mais próximas e ICs mais estreitos, o que é o esperado do modelo correto — e é exatamente por isso que ele é o que "paga" quando erra: com IC estreito, um desvio vira falta de cobertura.
-3. **`subsistema_S` erra em todos os três**, com sinal trocado. Não é falha de modelo: o Sul tem poucas usinas eólicas na base e o efeito verdadeiro (+0,10) é pequeno perto do ruído amostral. O mesmo já acontecia no Cox de 1º evento ([§8.3](#83-recuperação-dos-parâmetros-verdadeiros)).
+1. **O AG cobre tudo, mas por ser vago.** Seus ICs são os mais largos (SE de 0,055 contra 0,039 do PWP gap time em `log_potencia_mw_c`), então cobrir o valor verdadeiro custa pouco.
+2. **O PWP gap time é o mais preciso e o que mais erra IC.** Estimativas com ICs estreitos, o que é o esperado do modelo correto para este gerador — e é exatamente por isso que ele "paga" quando há viés: com IC estreito, um desvio pequeno já vira falta de cobertura.
+3. **Os três subestimam `log_potencia_mw_c` (0,09 a 0,11 contra 0,20 verdadeiro).** Esta é a assinatura da **fragilidade**: nenhum dos três modela o fator aleatório por usina, e a heterogeneidade não observada atenua os coeficientes marginais — o mesmo efeito visto no Cox de 1º evento ([§7.2](#72-coeficientes)). Modelar a fragilidade explicitamente é o assunto da [§14.7](#147-fragilidade-gama-por-usina).
 
 ### 14.4 O estrato de episódio
 
@@ -436,6 +462,8 @@ O PWP estratifica por número do episódio, mas episódios altos têm poucos eve
 
 Agrupar demais junta episódios com riscos de base bem diferentes no mesmo estrato (o gerador piora o risco a cada reparo) e enviesa os coeficientes; agrupar de menos deixa estratos com um punhado de eventos. A partir de 6 o ganho satura.
 
+*(Esta tabela foi medida na versão dos dados sem fragilidade; a escolha de 6 não foi revista depois, e a ordem de grandeza do compromisso é a mesma.)*
+
 ### 14.5 Função média cumulativa (MCF)
 
 A MCF é o análogo do Kaplan-Meier para eventos recorrentes. Em vez de "fração que ainda não falhou", responde **"quantas manutenções uma usina típica já acumulou"**:
@@ -446,8 +474,8 @@ com $Y(s)$ = usinas ainda sob observação em $s$.
 
 | Manutenções acumuladas por usina | 1 ano | 3 anos | 5 anos | 10 anos |
 |---|---|---|---|---|
-| Eólica | 0,09 | 0,45 | 0,92 | 2,32 |
-| Solar | 0,05 | 0,29 | 0,58 | 1,57 |
+| Eólica | 0,09 | 0,45 | 0,89 | 2,27 |
+| Solar | 0,05 | 0,30 | 0,59 | 1,63 |
 
 A curvatura para cima é a deterioração: a segunda metade da década acumula mais eventos que a primeira.
 
@@ -463,14 +491,68 @@ Médias nas 93 unidades com cadastro confiável:
 
 | Fonte | 6 meses | 12 meses | 24 meses | 36 meses |
 |---|---|---|---|---|
-| Eólica | 0,23 | 0,49 | 1,00 | 1,54 |
-| Solar | 0,11 | 0,19 | 0,39 | 0,62 |
+| Eólica | 0,22 | 0,42 | 0,89 | 1,38 |
+| Solar | 0,10 | 0,19 | 0,36 | 0,50 |
 
-As cinco no topo são todas eólicas do Nordeste com mais de 14 anos — EOL PRA FORMOSA lidera, com 1,10 manutenção esperada em 12 meses. É a mesma ordenação do card de 1º evento, o que era de esperar: os dois modelos leem as mesmas covariáveis.
+As cinco no topo são todas eólicas do Nordeste com mais de 14 anos — EOL ICARAIZINHO lidera, com 0,99 manutenção esperada em 12 meses. É a mesma ordenação do card de 1º evento, o que era de esperar: os dois modelos leem as mesmas covariáveis.
 
-### 14.7 O que ainda não está ligado
+### 14.7 Fragilidade gama por usina
 
-O previsor de recorrência é treinado e salvo (`ML/modelos/sobrevivencia_recorrencia.pkl`), mas **não** é servido pela API nem aparece no frontend — o card continua sendo o de 1º evento. Ligar exigiria um endpoint novo e um segundo card, o que não foi feito aqui.
+Todos os modelos até aqui — 1º evento, AG e PWP — dão a **mesma linha de base a todas as usinas da mesma fonte**. Duas eólicas de 50 MW no Nordeste, entradas no mesmo ano, são tratadas como idênticas. Na prática não são: fabricante do equipamento, qualidade da montagem e regime de operação não estão no cadastro público.
+
+A fragilidade representa isso com um fator aleatório por usina, comum a todos os seus episódios ([doc dos dados simulados §5.1](../ingestao/doc_tecnica_dados_simulados.md#51-fragilidade-frailty-gama-por-usina)):
+
+$$h(t \mid x, Z) = Z \cdot h_{0,\text{fonte}}(t) \cdot e^{\beta \cdot x}, \qquad Z \sim \text{Gama}(1/\theta,\ \theta)$$
+
+`Z` tem média 1, então não desloca o risco médio: ele o **espalha**. É `theta`, a variância, que se quer estimar.
+
+#### Como estimar sem um ajustador de frailty
+
+O lifelines não tem modelo de fragilidade compartilhada. Mas há uma equivalência conhecida: o Andersen-Gill com fragilidade gama tem a mesma verossimilhança de uma **binomial negativa** sobre a contagem de eventos por usina — e o parâmetro de dispersão da NB *é* `theta`.
+
+$$N_i \sim \text{NB}\big(\text{média} = \text{MCF}_\text{fonte}(T_i) \cdot e^{\beta \cdot x_i},\ \text{dispersão} = \theta\big)$$
+
+Dois detalhes que fazem a conta fechar:
+
+- A exposição não é o tempo em anos: o risco de base cresce com a idade, então dois anos de uma usina nova não valem dois anos de uma velha. O *offset* é `log MCF_fonte(T_i)` — quantos eventos uma usina **média** daquela fonte teria acumulado nesse tempo.
+- O teste contra o **Poisson** (`theta = 0`) é o teste de que a fragilidade existe. Rejeitar quer dizer que sobra variação entre usinas depois das covariáveis — exatamente o que a linha de base única ignorava.
+
+#### Resultado
+
+| | Valor |
+|---|---|
+| `theta` estimado | **0,283** (IC 95% 0,214 – 0,352) |
+| `theta` amostral do gerador | 0,536 |
+| Razão de verossimilhança contra o Poisson | **157,4** (1 gl) |
+| Correlação com a fragilidade verdadeira | Pearson 0,54 / Spearman 0,50 |
+
+A detecção é inequívoca: uma estatística de 157 com 1 grau de liberdade descarta o Poisson sem margem para dúvida, e a ordenação das usinas tem correlação de 0,5 com a fragilidade real — o modelo identifica quais usinas quebram mais do que suas covariáveis explicam.
+
+**O nível, porém, sai atenuado: 0,283 contra 0,536.** Calibrei o estimador gerando conjuntos com `theta` conhecido:
+
+| `theta` do gerador | 0,0 | 0,5 | 1,0 |
+|---|---|---|---|
+| `theta` estimado | **0,000** | 0,283 | 0,594 |
+| LR contra o Poisson | 0,0 | 157,4 | 393,2 |
+| Correlação com o Z real | — | 0,54 | 0,66 |
+
+Duas conclusões. Primeiro, **o estimador não inventa heterogeneidade**: com `theta = 0` ele devolve exatamente 0 e a razão de verossimilhança zera. Segundo, a atenuação é sistemática, em torno de 0,6× — e tem explicação: a equivalência NB supõe um processo de **Poisson** dado `Z`, enquanto o gerador usa um processo de renovação **Weibull** com forma > 1. Intervalos entre eventos mais regulares que os exponenciais produzem contagens subdispersas, que cancelam parte da dispersão vinda da fragilidade. Para ordenar usinas isso não atrapalha; para afirmar "a variância da fragilidade é 0,28", atrapalha.
+
+#### A fragilidade posterior como produto
+
+Com `theta` estimado, o Bayes empírico dá a fragilidade de cada usina pela conjugação gama-Poisson:
+
+$$E[Z_i \mid N_i] = \frac{1/\theta + N_i}{1/\theta + \mu_i}$$
+
+Lê-se direto: a usina que teve mais eventos do que o esperado para o seu perfil sai com `Z > 1`. O `1/theta` é o peso do encolhimento em direção a 1 — com pouca evidência, a estimativa não dispara. As cinco mais frágeis da base têm `Z` entre 2,4 e 2,6, todas com 10 ou mais manutenções onde o perfil previa 2 a 3.
+
+É a resposta a uma pergunta que nenhum dos outros modelos responde: *quais usinas são piores do que parecem*. A saída fica em `ML/modelos/recorrentes_frailty_por_usina.parquet`.
+
+### 14.8 O que ainda não está ligado
+
+O previsor de recorrência é treinado e salvo (`ML/modelos/sobrevivencia_recorrencia.pkl`), mas **não** é servido pela API nem aparece no frontend — o card continua sendo o de 1º evento. Ligar exigiria um endpoint novo e um segundo card, o que não foi feito aqui. Vale o mesmo para a fragilidade posterior por usina, que seria um bom sinal de alerta na tela.
+
+A fragilidade também **não** entra no modelo de produção: o Cox de 1º evento continua sem ela, e por isso seus coeficientes são os marginais, atenuados. Incluí-la exigiria um Cox com fragilidade compartilhada, que o lifelines não oferece.
 
 ---
 
@@ -479,9 +561,10 @@ O previsor de recorrência é treinado e salvo (`ML/modelos/sobrevivencia_recorr
 | # | Limitação | Impacto | Próximo passo |
 |---|---|---|---|
 | 1 | **Eventos sintéticos** | Nenhuma conclusão vale para o mundo real | Substituir pelo histórico real de O&M, se houver acesso; o pipeline não muda |
-| 2 | C-index de 0,567 | Discriminação fraca | É o teto deste gerador. Com dado real, avaliar se há sinal mais forte |
+| 2 | C-index de 0,578 | Discriminação fraca | É o teto deste gerador. Com dado real, avaliar se há sinal mais forte |
 | 3 | Só 93 das 308 unidades recebem previsão | Cobertura parcial do frontend | Melhorar o vínculo ONS × ANEEL ([ETL §15](../ETL/doc_tecnica_etl.md#15-limitações-conhecidas-e-próximos-passos)) |
 | 4 | Efeitos regionais imprecisos | ICs largos, estimativas distantes | Inerente à geografia do parque; só mais dados resolvem |
+| 4b | Coeficientes atenuados pela fragilidade não modelada | O Cox de produção estima o efeito **marginal**, menor que o condicional ([§7.2](#72-coeficientes)) | Cox com fragilidade compartilhada (não disponível no lifelines) ou estimação via NB, como na [§14.7](#147-fragilidade-gama-por-usina) |
 | 5 | ~~Um evento por usina~~ **Resolvido:** Andersen-Gill e PWP ajustados sobre o painel de episódios ([§14](#14-eventos-recorrentes-andersen-gill-e-pwp)) | Resta: o produto servido pela API é só o de 1º evento | Endpoint e card de manutenções esperadas ([§14.7](#147-o-que-ainda-não-está-ligado)) |
 | 6 | Sem intervalo na probabilidade | O card mostra um ponto | Bootstrap sobre os coeficientes do Cox para banda de confiança |
 | 7 | Extrapolação Weibull não validada | 21 usinas dependem dela, fora do suporte observado | Por definição não há dado para validar; sinalizar no frontend quando `metodo_extrapolacao = "weibull"` |
