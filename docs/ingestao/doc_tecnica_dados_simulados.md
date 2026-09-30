@@ -415,6 +415,36 @@ Há ainda a trava de segurança em 60 episódios por usina, que **não** é atin
 
 ---
 
+## 9.2 Variante com efeito tempo-dependente — `eventos_manutencao_ph_violado.parquet`
+
+O conjunto principal satisfaz riscos proporcionais **por construção** dentro de cada fonte. Isso é bom para validar a estimação, e inútil para validar o **diagnóstico**: rodar um teste de Schoenfeld ali só pode dar "não detectei nada", e isso não diz se o teste funciona. Um diagnóstico sem controle positivo é fé.
+
+A variante existe para ser esse controle positivo. Nela, o efeito de uma covariável **muda no tempo**:
+
+$$\beta(t) = \begin{cases} +0{,}60 & t \le 3\ \text{anos} \\ -0{,}10 & t > 3\ \text{anos}\end{cases} \qquad \text{para } \texttt{log\_potencia\_mw\_c}$$
+
+A história por trás: usina grande dá muito mais trabalho nos primeiros anos (comissionamento, ajuste, infantil) e, depois de amaciada, o porte deixa de pesar. A troca de sinal é deliberada — é uma violação **gritante**, escolhida para medir o piso de detecção: se o teste não pega esta, não pega nenhuma.
+
+### Por que constante por partes
+
+Com $\beta$ variando continuamente no tempo, a inversão da Weibull deixa de ter forma fechada e exigiria integração numérica do risco acumulado. Constante por partes mantém a inversão **exata** em cada trecho:
+
+$$H(t) = \begin{cases} \Lambda_0(t)\,e^{\eta_\text{antes}} & t \le c \\ \Lambda_0(c)\,e^{\eta_\text{antes}} + [\Lambda_0(t) - \Lambda_0(c)]\,e^{\eta_\text{depois}} & t > c\end{cases}$$
+
+Sorteia-se $E \sim \text{Exp}(1)$: se $E$ couber no primeiro trecho, vale a fórmula usual; senão, o que sobra é consumido na taxa do segundo. É também a forma de alternativa que os testes de Schoenfeld têm em mente.
+
+### A fragilidade fica desligada aqui
+
+Heterogeneidade não observada **também** derruba a premissa de PH ([§5.1](#51-fragilidade-frailty-gama-por-usina)). Se a variante tivesse as duas coisas, um teste que acusasse não diria qual das duas causou. Com `theta = 0`, o que o teste detectar vem só do efeito tempo-dependente.
+
+### Perfil
+
+1.854 usinas, 1.047 eventos — 547 antes do corte de 3 anos e 500 depois, o que dá massa suficiente nos dois lados para estimar os dois betas. O arquivo tem a coluna `periodo_do_evento` (`antes`/`depois`) só para conferência.
+
+Os resultados do diagnóstico estão na [doc da análise §8.5](../ML/doc_tecnica_analise_sobrevivencia.md#85-poder-do-teste-de-schoenfeld).
+
+---
+
 ## 10. Metadados e reprodutibilidade
 
 Junto ao parquet é gravado `eventos_manutencao_simulados.meta.json`:
@@ -601,7 +631,7 @@ cph.predict_median(novas)                                   # tempo mediano até
 | 2 | ~~**Só o 1º evento** por usina~~ **Resolvido:** o gerador produz o processo completo em `eventos_manutencao_recorrentes.parquet` ([§9.1](#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)), a análise ajusta Andersen-Gill e PWP, e as manutenções esperadas são servidas em `/usinas/{id}/recorrencia` com card próprio | — | — |
 | 3 | `tipo_evento` independente do tempo | Não serve para riscos competitivos (Fine-Gray, cause-specific) | Gerar um tempo latente por causa e observar o mínimo |
 | 4 | ~~Linha de base igual para todas as usinas da mesma fonte~~ **Resolvido:** fragilidade gama por usina, com `theta = 0,5` ([§5.1](#51-fragilidade-frailty-gama-por-usina)) | Resta: os modelos ajustados não incluem a fragilidade, então estimam efeitos marginais atenuados | Estimador via binomial negativa já implementado ([doc da análise §14.7](../ML/doc_tecnica_analise_sobrevivencia.md#147-fragilidade-gama-por-usina)); falta um Cox com fragilidade compartilhada |
-| 5 | Efeitos das covariáveis constantes no tempo | Hipótese PH vale por construção dentro da fonte | Para testar diagnósticos, gerar uma variante com efeito tempo-dependente |
+| 5 | ~~Efeitos das covariáveis constantes no tempo~~ **Resolvido:** variante `eventos_manutencao_ph_violado.parquet` com efeito que muda no tempo ([§9.2](#92-variante-com-efeito-tempo-dependente--eventos_manutencao_ph_violadoparquet)), usada para medir o poder do teste de Schoenfeld | — | — |
 | 6 | Censura apenas administrativa | Não há perda de acompanhamento nem descomissionamento | Adicionar censura aleatória exponencial independente |
 | 7 | População = usinas **hoje** em operação | Usinas já descomissionadas não aparecem (viés de sobrevivente no cadastro) | Pequeno para UFV/EOL, parque jovem; documentado |
 | 8 | Parâmetros são premissas de ordem de grandeza | Valores absolutos (medianas de 4–5 anos) podem não refletir o setor | Calibrar com literatura de O&M ou dados de operadores se disponíveis |

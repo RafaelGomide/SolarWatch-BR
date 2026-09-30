@@ -54,6 +54,7 @@ ML/analise_sobrevivencia/
 ├── dados.py             # carga do treino (simulado) e das usinas da predição (dim_usina)
 ├── modelos.py           # KM, paramétricos, Cox, Weibull de regressão e o Previsor
 ├── recorrentes.py       # Andersen-Gill, PWP (tempo total e gap time), MCF
+├── diagnosticos.py      # poder do teste de PH, com violação de tamanho conhecido
 ├── avaliacao.py         # C-index k-fold, Schoenfeld, recuperação dos betas, calibração
 ├── treinar.py           # 1º evento: orquestra tudo, salva pickles e tabelas
 ├── treinar_recorrentes.py  # eventos recorrentes: AG, PWP, MCF e manutenções esperadas
@@ -70,7 +71,8 @@ python -m ML.analise_sobrevivencia.treinar            # ~20 s
 python -m ML.analise_sobrevivencia.treinar --horizontes 3 6 12
 python -m ML.analise_sobrevivencia.treinar --sem-graficos --sem-salvar
 
-python -m ML.analise_sobrevivencia.treinar_recorrentes   # eventos recorrentes (§15)
+python -m ML.analise_sobrevivencia.treinar_recorrentes   # eventos recorrentes (§14)
+python -m ML.analise_sobrevivencia.diagnosticos --poder  # diagnóstico de PH (§8.5)
 ```
 
 | Argumento | Padrão | Efeito |
@@ -197,6 +199,8 @@ O código também ajusta, para comparação, um Cox com `fonte` como covariável
 
 Essa é uma lição que vale registrar: **"o teste passou" não prova que a premissa vale.** As duas formas Weibull (1,3 e 1,6) são próximas o bastante para o teste não ter poder de distinguir na janela observada. A estratificação aqui se justifica pelo que se sabe do processo gerador, não pelo resultado do teste. Com dado real, sem conhecer o gerador, o caminho seria olhar também os resíduos de Schoenfeld no tempo e as curvas log(−log S).
 
+A [§8.5](#85-poder-do-teste-de-schoenfeld) mede esse limite: com uma violação construída de tamanho conhecido, o teste só acusa de forma confiável quando o efeito muda por um fator de ~2 entre os períodos.
+
 ---
 
 ## 8. Avaliação
@@ -257,6 +261,58 @@ Discriminação responde "ordena certo?". Calibração responde "**o número est
 **Erro absoluto médio de 0,012, máximo de 0,020.** O modelo está bem calibrado, e os grupos aparecem na ordem certa (g1 sobrevive mais que g3 em todos os tempos). Como a saída do produto é uma probabilidade exibida ao usuário, calibração importa mais que C-index.
 
 ![Calibração](../../ML/analise_sobrevivencia/resultados/calibracao.png)
+
+### 8.5 Poder do teste de Schoenfeld
+
+> Esta seção responde a pergunta deixada em aberto na [§7.3](#73-o-cox-ingênuo-e-o-limite-do-teste-de-premissa): o teste não acusou a violação embutida no Cox ingênuo — era falha do teste ou a violação era pequena demais?
+
+`diagnosticos.py` usa a variante com violação de tamanho **conhecido** ([dados simulados §9.2](../ingestao/doc_tecnica_dados_simulados.md#92-variante-com-efeito-tempo-dependente--eventos_manutencao_ph_violadoparquet)), em que o efeito de `log_potencia_mw_c` salta de +0,60 para −0,10 aos 3 anos.
+
+```bash
+python -m ML.analise_sobrevivencia.diagnosticos --poder
+```
+
+#### Controle negativo e controle positivo
+
+| Conjunto | `log_potencia_mw_c` | menor p entre as outras |
+|---|---|---|
+| Principal (PH vale por construção) | p = 0,197 | 0,392 |
+| Variante (PH violado por construção) | **p = 0,0087** | 0,367 |
+
+O teste **funciona**: fica quieto onde não há violação e acusa exatamente a covariável certa onde há, sem espalhar falso positivo pelas outras quatro.
+
+#### O preço de ignorar
+
+Na variante, um Cox comum estima **+0,203** para `log_potencia_mw_c` (p < 0,0001). É uma média ponderada dos dois períodos que **não descreve nenhum dos dois**: nem os +0,60 dos primeiros 3 anos, nem os −0,10 depois. Pior, é altamente significativa — o modelo parece confiante sobre um número que não existe em lugar nenhum do processo.
+
+#### A correção
+
+Partindo o tempo no corte (cada usina vira dois intervalos, `(0, 3]` e `(3, T]`, com uma interação que só liga no segundo):
+
+| Período | Verdadeiro | Estimado | IC 95% | Cobre |
+|---|---|---|---|---|
+| Antes de 3 anos | +0,60 | **+0,529** | 0,371 – 0,687 | ✅ |
+| Depois de 3 anos | −0,10 | **−0,087** | −0,338 – 0,164 | ✅ |
+| Diferença | −0,70 | **−0,616** | −0,811 – −0,421 | ✅ |
+
+Os dois efeitos são recuperados, e a diferença é claramente diferente de zero. Detectar que a premissa caiu só vale alguma coisa porque há o que fazer em seguida.
+
+#### Quanto a violação precisa ser grande
+
+Regerando a variante com violações de vários tamanhos, três sementes cada:
+
+| Δβ (depois − antes) | 0,00 | −0,20 | −0,35 | −0,50 | −0,70 |
+|---|---|---|---|---|---|
+| p mediano | 0,81 | 0,69 | 0,18 | 0,21 | **0,032** |
+| Acusou (de 3) | 0 | 0 | 0 | 1 | **3** |
+
+**Só uma violação de 0,7 no log-risco é detectada de forma confiável** — isto é, o risco relativo daquela covariável precisa mudar por um fator de $e^{0,7} \approx 2$ entre os períodos. Uma violação de 0,35, que já é um efeito trocando de metade, passa despercebida nas três sementes.
+
+Isso fecha a questão da §7.3: **não foi falha do teste, foi falta de poder.** As duas formas Weibull do Cox ingênuo (1,3 e 1,6) produzem uma divergência muito menor que 0,7 na janela observada. E a lição prática inverte o uso comum do teste: com ~900 eventos, "o Schoenfeld passou" autoriza dizer que não há violação **grosseira**, e nada além disso. A estratificação por fonte continua se justificando pelo que se sabe do processo, não pelo resultado do teste.
+
+![Resíduos de Schoenfeld na variante](../../ML/analise_sobrevivencia/resultados/schoenfeld_ph_violado.png)
+
+No gráfico, os resíduos escalados da covariável têm inclinação visível em torno do corte — é assim que a violação aparece antes mesmo do p-valor.
 
 ---
 

@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-09-30T18:11:35",
+  "gerado_em": "2026-09-30T18:46:55",
   "descricao": "Dados SINTÉTICOS de manutenção corretiva RECORRENTE por usina, em formato de processo de contagem (um intervalo por episódio).",
   "fonte_usinas": "dados/bruto/dados_aneel_bruto.parquet",
   "seed": 42,

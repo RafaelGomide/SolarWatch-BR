@@ -63,11 +63,26 @@ arquivo de 1º evento: os episódios seguintes são gerados a partir dele, entã
 os dois arquivos são consistentes e o de 1º evento continua idêntico ao de
 antes para a mesma semente.
 
+Variante com efeito tempo-dependente
+------------------------------------
+O conjunto principal satisfaz riscos proporcionais **por construção** dentro de
+cada fonte, o que o torna inútil para testar se um diagnóstico de PH funciona:
+não há violação para detectar. O script gera também uma variante em que o efeito
+de uma covariável **muda no tempo**, com violação de tamanho conhecido:
+
+    beta(t) = BETA_ANTES  se t <= CORTE_ANOS,  BETA_DEPOIS  caso contrário
+
+Um efeito constante por partes (e não uma função contínua do tempo) é de
+propósito: mantém a inversão da Weibull exata em cada trecho, sem integração
+numérica, e é exatamente a alternativa que os testes de Schoenfeld têm em mente.
+
 Saída:
     dados/simulados/eventos_manutencao_simulados.parquet       (1 linha por usina)
     dados/simulados/eventos_manutencao_simulados.meta.json
     dados/simulados/eventos_manutencao_recorrentes.parquet     (1 linha por episódio)
     dados/simulados/eventos_manutencao_recorrentes.meta.json
+    dados/simulados/eventos_manutencao_ph_violado.parquet      (variante de diagnóstico)
+    dados/simulados/eventos_manutencao_ph_violado.meta.json
 
 Uso:
     python -m ML.analise_sobrevivencia.dados_simulados
@@ -92,6 +107,7 @@ RAIZ = Path(__file__).resolve().parents[2]
 ENTRADA = RAIZ / "dados" / "bruto" / "dados_aneel_bruto.parquet"
 SAIDA = RAIZ / "dados" / "simulados" / "eventos_manutencao_simulados.parquet"
 SAIDA_RECORRENTES = RAIZ / "dados" / "simulados" / "eventos_manutencao_recorrentes.parquet"
+SAIDA_PH_VIOLADO = RAIZ / "dados" / "simulados" / "eventos_manutencao_ph_violado.parquet"
 
 SEED_PADRAO = 42
 POTENCIA_MINIMA_MW_PADRAO = 1.0  # exclui microssistemas de 1 kW (pessoas físicas)
@@ -115,6 +131,17 @@ BETA = {
 }
 POTENCIA_REFERENCIA_MW = 30.0
 ANO_REFERENCIA = 2018
+
+# Variante de diagnóstico: efeito de uma covariável que muda no tempo.
+# O valor de "antes" é grande e o de "depois" troca de sinal — uma violação
+# gritante, escolhida para medir o PISO de detecção do teste: se o Schoenfeld
+# não pega esta, não pega nenhuma.
+EFEITO_TEMPO_DEPENDENTE = {
+    "covariavel": "log_potencia_mw_c",
+    "beta_antes": 0.60,    # usina grande falha muito mais nos primeiros anos
+    "beta_depois": -0.10,  # depois de amaciada, o porte deixa de pesar
+    "corte_anos": 3.0,
+}
 
 # Fragilidade: variância do fator aleatório por usina (média sempre 1).
 # 0,5 = desvio-padrão de 0,71; 0 desliga a heterogeneidade não observada.
@@ -187,15 +214,20 @@ def carregar_usinas(potencia_minima_mw: float) -> tuple[pd.DataFrame, pd.Timesta
     return usinas.sort_values("ceg").reset_index(drop=True), data_corte
 
 
-def _preditor_linear(usinas: pd.DataFrame) -> pd.Series:
-    x = {
+def _covariaveis_do_gerador(usinas: pd.DataFrame) -> pd.DataFrame:
+    """As covariáveis do modelo, na mesma centralização que a análise usa."""
+    return pd.DataFrame({
         "log_potencia_mw_c": np.log(usinas["potencia_mw"]) - np.log(POTENCIA_REFERENCIA_MW),
         "subsistema_NE": (usinas["id_subsistema"] == "NE").astype(float),
         "subsistema_S": (usinas["id_subsistema"] == "S").astype(float),
         "subsistema_N": (usinas["id_subsistema"] == "N").astype(float),
-        "ano_entrada_c": usinas["data_entrada_operacao"].dt.year - ANO_REFERENCIA,
-    }
-    return sum(BETA[nome] * valor for nome, valor in x.items())
+        "ano_entrada_c": (usinas["data_entrada_operacao"].dt.year - ANO_REFERENCIA).astype(float),
+    })
+
+
+def _preditor_linear(usinas: pd.DataFrame) -> pd.Series:
+    x = _covariaveis_do_gerador(usinas)
+    return sum(BETA[nome] * x[nome] for nome in BETA)
 
 
 def sortear_frailty(n: int, variancia: float, seed: int) -> np.ndarray:
@@ -321,6 +353,94 @@ def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte:
     ]].sort_values(["id_usina", "episodio"]).reset_index(drop=True)
 
 
+def simular_ph_violado(usinas: pd.DataFrame, data_corte: pd.Timestamp, seed: int,
+                       efeito: dict | None = None,
+                       variancia_frailty: float = 0.0) -> pd.DataFrame:
+    """Variante em que o efeito de uma covariável muda no tempo (viola PH).
+
+    O risco acumulado da Weibull é `Lambda0(t) = (t/lambda)**k`. Com o efeito
+    constante por partes, o risco acumulado individual também é, e a inversão
+    sai exata em cada trecho:
+
+        H(t) = Lambda0(t) · e^(eta_antes)                             , t <= c
+        H(t) = Lambda0(c) · e^(eta_antes) + [Lambda0(t) − Lambda0(c)] · e^(eta_depois)
+
+    Sorteia-se `E ~ Exp(1)` e resolve-se `H(T) = E`: se `E` couber no primeiro
+    trecho, vale a fórmula usual; senão, o que sobra é consumido na taxa do
+    segundo trecho.
+
+    A fragilidade fica **desligada** por padrão aqui: esta variante existe para
+    isolar um efeito — heterogeneidade não observada também derruba a premissa
+    de PH, e misturar as duas coisas tornaria o diagnóstico ambíguo.
+    """
+    efeito = efeito or EFEITO_TEMPO_DEPENDENTE
+    rng = np.random.default_rng(seed + 3)
+    df = usinas.copy()
+
+    k = df["fonte"].map(lambda f: WEIBULL[f]["k"]).to_numpy()
+    escala = df["fonte"].map(lambda f: WEIBULL[f]["lambda_anos"]).to_numpy()
+    df["frailty"] = sortear_frailty(len(df), variancia_frailty, seed)
+
+    coluna = efeito["covariavel"]
+    x = _covariaveis_do_gerador(df)[coluna].to_numpy()
+    # preditor linear sem a covariável de efeito variável, mais cada versão dela
+    base = (_preditor_linear(df).to_numpy() - BETA[coluna] * x + np.log(df["frailty"]))
+    eta_antes = base + efeito["beta_antes"] * x
+    eta_depois = base + efeito["beta_depois"] * x
+
+    corte = float(efeito["corte_anos"])
+    lambda0_corte = (corte / escala) ** k
+    e = rng.exponential(size=len(df))
+    risco_ate_o_corte = lambda0_corte * np.exp(eta_antes)
+
+    antes = e <= risco_ate_o_corte
+    tempo = np.where(
+        antes,
+        escala * (e / np.exp(eta_antes)) ** (1 / k),
+        escala * (lambda0_corte + (e - risco_ate_o_corte) / np.exp(eta_depois)) ** (1 / k),
+    )
+
+    observavel = ((data_corte - df["data_entrada_operacao"]).dt.days / 365.25).to_numpy()
+    df["evento"] = (tempo <= observavel).astype(int)
+    df["tempo_anos"] = np.where(df["evento"] == 1, tempo, observavel)
+    df["periodo_do_evento"] = np.where(df["tempo_anos"] <= corte, "antes", "depois")
+    df["data_evento"] = df["data_entrada_operacao"] + pd.to_timedelta(
+        np.where(df["evento"] == 1, tempo * 365.25, np.nan), unit="D").round("D")
+    df["data_corte"] = data_corte
+
+    df.insert(0, "id_usina", np.arange(1, len(df) + 1))
+    return df[[
+        "id_usina", "ceg", "fonte", "sig_tipo_geracao", "id_estado", "id_subsistema",
+        "potencia_mw", "data_entrada_operacao", "data_corte",
+        "tempo_anos", "evento", "data_evento", "periodo_do_evento", "frailty",
+    ]]
+
+
+def _gravar_metadados_ph(saida: Path, seed: int, efeito: dict, df: pd.DataFrame) -> None:
+    meta = {
+        "gerado_em": datetime.now().isoformat(timespec="seconds"),
+        "descricao": ("Variante SINTÉTICA com efeito de covariável dependente do tempo, "
+                      "para testar diagnósticos de riscos proporcionais."),
+        "fonte_usinas": ENTRADA.relative_to(RAIZ).as_posix(),
+        "seed": seed,
+        "seed_efetiva": seed + 3,
+        "modelo": "Weibull com beta constante por partes (viola PH por construção)",
+        "efeito_tempo_dependente": efeito,
+        "beta_verdadeiro": {**BETA, efeito["covariavel"]: "muda no tempo, ver efeito_tempo_dependente"},
+        "weibull_por_fonte": WEIBULL,
+        "variancia_frailty": 0.0,
+        "referencias_centralizacao": {
+            "potencia_mw": POTENCIA_REFERENCIA_MW, "ano_entrada": ANO_REFERENCIA,
+        },
+        "n_usinas": len(df),
+        "n_eventos": int(df["evento"].sum()),
+        "eventos_antes_do_corte": int(((df["evento"] == 1) & (df["periodo_do_evento"] == "antes")).sum()),
+        "eventos_depois_do_corte": int(((df["evento"] == 1) & (df["periodo_do_evento"] == "depois")).sum()),
+    }
+    caminho = saida.with_name(saida.stem + ".meta.json")
+    caminho.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _gravar_metadados(saida: Path, seed: int, potencia_minima_mw: float, df: pd.DataFrame) -> None:
     meta = {
         "gerado_em": datetime.now().isoformat(timespec="seconds"),
@@ -417,6 +537,16 @@ def main() -> None:
     gravar_parquet(recorrentes, SAIDA_RECORRENTES)
     _gravar_metadados_recorrentes(SAIDA_RECORRENTES, args.seed, args.potencia_minima_mw,
                                   args.gamma_recorrencia, recorrentes)
+
+    ph = simular_ph_violado(usinas, data_corte, args.seed)
+    por_periodo = ph[ph["evento"] == 1]["periodo_do_evento"].value_counts()
+    log.info("[ph-violado] %d eventos (%d antes de %.0f anos, %d depois) | efeito de %s: %+.2f -> %+.2f",
+             int(ph["evento"].sum()), int(por_periodo.get("antes", 0)),
+             EFEITO_TEMPO_DEPENDENTE["corte_anos"], int(por_periodo.get("depois", 0)),
+             EFEITO_TEMPO_DEPENDENTE["covariavel"], EFEITO_TEMPO_DEPENDENTE["beta_antes"],
+             EFEITO_TEMPO_DEPENDENTE["beta_depois"])
+    gravar_parquet(ph, SAIDA_PH_VIOLADO)
+    _gravar_metadados_ph(SAIDA_PH_VIOLADO, args.seed, EFEITO_TEMPO_DEPENDENTE, ph)
 
 
 if __name__ == "__main__":
