@@ -41,9 +41,23 @@ Com frailty, o risco marginal (integrando `Z`) deixa de ser proporcional mesmo
 com covariáveis constantes, e o Cox comum **atenua** os coeficientes: é o
 efeito conhecido de heterogeneidade não observada.
 
-Censura à direita (administrativa): cada usina é observada da data de entrada
-em operação até a data do retrato da ANEEL. Se o tempo simulado até o evento
-passa dessa data, a usina fica censurada (`evento = 0`, sem `data_evento`).
+Censura à direita, por dois mecanismos:
+
+1. **Administrativa:** cada usina é observada da entrada em operação até a data
+   do retrato da ANEEL. Quem não falhou até lá fica censurado.
+2. **Aleatória (perda de acompanhamento):** `C ~ Exponencial(taxa)`, independente
+   do tempo até o evento. Representa o que tira a usina da observação sem ser
+   falha — descomissionamento, venda com troca de operador, saída do dado
+   público, repotenciação que zera o histórico.
+
+O tempo observado é `min(T, C_administrativa, C_aleatória)` e `evento = 1` só
+quando o mínimo é `T`. A coluna `motivo_censura` registra qual dos três venceu.
+
+A censura aleatória é **independente** do tempo até a falha por construção
+(sorteada sem olhar para `T` nem para as covariáveis). Isso é o que a análise de
+sobrevivência supõe, e é o que torna Kaplan-Meier e Cox consistentes; censura
+*informativa* — por exemplo, tirar da observação justo as usinas que estão
+prestes a falhar — enviesaria tudo, e não é o caso aqui.
 
 Eventos RECORRENTES
 -------------------
@@ -142,6 +156,11 @@ EFEITO_TEMPO_DEPENDENTE = {
     "beta_depois": -0.10,  # depois de amaciada, o porte deixa de pesar
     "corte_anos": 3.0,
 }
+
+# Censura aleatória: taxa anual da exponencial de perda de acompanhamento.
+# 0,03/ano = tempo médio de 33 anos até sair da observação, o que com ~6 anos de
+# acompanhamento médio tira da ordem de 10% das usinas. 0 desliga.
+TAXA_CENSURA_ALEATORIA = 0.03
 
 # Fragilidade: variância do fator aleatório por usina (média sempre 1).
 # 0,5 = desvio-padrão de 0,71; 0 desliga a heterogeneidade não observada.
@@ -242,8 +261,21 @@ def sortear_frailty(n: int, variancia: float, seed: int) -> np.ndarray:
     return rng.gamma(shape=1 / variancia, scale=variancia, size=n)
 
 
+def sortear_censura_aleatoria(n: int, taxa: float, seed: int) -> np.ndarray:
+    """Tempo até a perda de acompanhamento, `C ~ Exponencial(taxa)`.
+
+    Fluxo aleatório próprio (`seed + 4`) para que ligar ou desligar a censura
+    aleatória não desloque os demais sorteios. Sorteado **sem olhar** para o
+    tempo até o evento nem para as covariáveis: é isso que a torna independente.
+    """
+    if taxa <= 0:
+        return np.full(n, np.inf)
+    return np.random.default_rng(seed + 4).exponential(scale=1 / taxa, size=n)
+
+
 def simular(usinas: pd.DataFrame, data_corte: pd.Timestamp, seed: int,
-            variancia_frailty: float = VARIANCIA_FRAILTY) -> pd.DataFrame:
+            variancia_frailty: float = VARIANCIA_FRAILTY,
+            taxa_censura: float = TAXA_CENSURA_ALEATORIA) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     df = usinas.copy()
 
@@ -255,10 +287,17 @@ def simular(usinas: pd.DataFrame, data_corte: pd.Timestamp, seed: int,
 
     # Inversão da função de sobrevivência Weibull-PH
     tempo_ate_evento = escala * (rng.exponential(size=len(df)) / np.exp(eta)) ** (1 / k)
-    tempo_observavel = (data_corte - df["data_entrada_operacao"]).dt.days / 365.25
+    tempo_administrativo = (data_corte - df["data_entrada_operacao"]).dt.days / 365.25
+    tempo_aleatorio = sortear_censura_aleatoria(len(df), taxa_censura, seed)
 
+    # O que acontece primeiro encerra a observação
+    tempo_observavel = np.minimum(tempo_administrativo, tempo_aleatorio)
     df["evento"] = (tempo_ate_evento <= tempo_observavel).astype(int)
     df["tempo_anos"] = np.where(df["evento"] == 1, tempo_ate_evento, tempo_observavel)
+    df["motivo_censura"] = np.where(
+        df["evento"] == 1, "evento",
+        np.where(tempo_aleatorio < tempo_administrativo, "perda_acompanhamento", "administrativa"))
+    df["fim_observacao_anos"] = tempo_observavel
     df["data_evento"] = df["data_entrada_operacao"] + pd.to_timedelta(
         np.where(df["evento"] == 1, tempo_ate_evento * 365.25, np.nan), unit="D"
     ).round("D")
@@ -274,7 +313,8 @@ def simular(usinas: pd.DataFrame, data_corte: pd.Timestamp, seed: int,
     return df[[
         "id_usina", "ceg", "fonte", "sig_tipo_geracao", "id_estado", "id_subsistema",
         "potencia_mw", "data_entrada_operacao", "data_corte",
-        "tempo_anos", "evento", "data_evento", "tipo_evento", "frailty",
+        "tempo_anos", "evento", "data_evento", "tipo_evento", "motivo_censura",
+        "fim_observacao_anos", "frailty",
     ]]
 
 
@@ -298,7 +338,8 @@ def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte:
     # estimável (ela vira correlação entre os episódios de uma mesma usina)
     frailty = eventos["frailty"].to_numpy()
     eta = _preditor_linear(usinas).to_numpy() + np.log(frailty)
-    observavel = ((data_corte - usinas["data_entrada_operacao"]).dt.days / 365.25).to_numpy()
+    # O fim da observação de cada usina já considera a censura aleatória
+    observavel = eventos["fim_observacao_anos"].to_numpy()
     primeiro_tempo = eventos["tempo_anos"].to_numpy()
     primeiro_evento = eventos["evento"].to_numpy()
 
@@ -330,7 +371,8 @@ def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte:
     painel = pd.DataFrame(linhas, columns=["posicao", "episodio", "t_inicio_anos",
                                            "t_fim_anos", "gap_anos", "evento"])
     identificacao = eventos[["id_usina", "ceg", "fonte", "id_estado", "id_subsistema",
-                             "potencia_mw", "data_entrada_operacao", "frailty"]].reset_index(drop=True)
+                             "potencia_mw", "data_entrada_operacao", "frailty",
+                             "motivo_censura"]].reset_index(drop=True)
     painel = painel.join(identificacao, on="posicao").drop(columns="posicao")
 
     painel["data_inicio"] = painel["data_entrada_operacao"] + pd.to_timedelta(
@@ -349,7 +391,7 @@ def simular_recorrentes(eventos: pd.DataFrame, usinas: pd.DataFrame, data_corte:
         "id_usina", "ceg", "fonte", "id_estado", "id_subsistema", "potencia_mw",
         "data_entrada_operacao", "data_corte", "episodio",
         "t_inicio_anos", "t_fim_anos", "gap_anos", "evento", "data_inicio", "data_fim",
-        "tipo_evento", "frailty",
+        "tipo_evento", "frailty", "motivo_censura",
     ]].sort_values(["id_usina", "episodio"]).reset_index(drop=True)
 
 
@@ -452,6 +494,10 @@ def _gravar_metadados(saida: Path, seed: int, potencia_minima_mw: float, df: pd.
         "modelo": ("Weibull de riscos proporcionais com fragilidade gama por usina, "
                    "linha de base por fonte"),
         "variancia_frailty": float(df["frailty"].var()) if "frailty" in df else 0.0,
+        "censura": {
+            "mecanismos": ["administrativa", "aleatoria_exponencial_independente"],
+            "distribuicao": df["motivo_censura"].value_counts().to_dict(),
+        },
         "weibull_por_fonte": WEIBULL,
         "beta_verdadeiro": BETA,
         "referencias_centralizacao": {
@@ -509,12 +555,16 @@ def main() -> None:
                         help="log do fator de risco por episódio (0 = reparo perfeito)")
     parser.add_argument("--variancia-frailty", type=float, default=VARIANCIA_FRAILTY,
                         help="variância da fragilidade gama por usina (0 = desliga)")
+    parser.add_argument("--taxa-censura-aleatoria", type=float, default=TAXA_CENSURA_ALEATORIA,
+                        help="taxa anual da censura aleatória independente (0 = só administrativa)")
     args = parser.parse_args()
 
     usinas, data_corte = carregar_usinas(args.potencia_minima_mw)
     log.info("%d usinas reais da ANEEL como base (retrato de %s)", len(usinas), data_corte.date())
 
-    eventos = simular(usinas, data_corte, args.seed, args.variancia_frailty)
+    eventos = simular(usinas, data_corte, args.seed, args.variancia_frailty,
+                      args.taxa_censura_aleatoria)
+    log.info("[censura] %s", eventos["motivo_censura"].value_counts().to_dict())
     log.info("[frailty] variância pedida %.2f, obtida %.2f | Z: mín %.2f, mediana %.2f, máx %.2f",
              args.variancia_frailty, eventos["frailty"].var(), eventos["frailty"].min(),
              eventos["frailty"].median(), eventos["frailty"].max())

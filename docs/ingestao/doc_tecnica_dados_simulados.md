@@ -295,9 +295,52 @@ Os métodos de sobrevivência exigem que a censura seja independente do tempo at
 - A data de entrada entra no modelo como covariável (`ano_entrada_c`).
 - Portanto, condicionalmente a $x$, $T$ e $C$ são independentes, e a hipótese vale **por construção**. Num modelo que omita `ano_entrada_c`, a censura fica parcialmente informativa: usinas novas são ao mesmo tempo menos arriscadas e mais censuradas.
 
+O segundo mecanismo, a perda de acompanhamento ([§7.4](#74-censura-aleatória-independente)), é independente de forma ainda mais direta: é sorteado sem olhar para nada.
+
 ### 7.3 Consequência prática
 
-Como o parque solar é muito mais novo (mediana de entrada em 2023, contra 2018 nas eólicas), as solares ficam **muito mais censuradas**: 71% contra 28%. Isso é realista e é exatamente o cenário em que a análise de sobrevivência é necessária. Uma média ingênua dos tempos observados subestimaria muito o tempo até o evento das solares.
+Como o parque solar é muito mais novo (mediana de entrada em 2023, contra 2018 nas eólicas), as solares ficam **muito mais censuradas**: 77% contra 42%. Isso é realista e é exatamente o cenário em que a análise de sobrevivência é necessária. Uma média ingênua dos tempos observados subestimaria muito o tempo até o evento das solares.
+
+---
+
+### 7.4 Censura aleatória independente
+
+A censura administrativa sozinha supõe que **toda** usina fica sob observação até a data do retrato. Não é o que acontece: usina é descomissionada, é vendida e troca de operador, some do dado público, passa por repotenciação que zera o histórico. Nada disso é falha, mas tira a usina da observação.
+
+O gerador acrescenta um segundo mecanismo:
+
+$$C_i \sim \text{Exponencial}(\text{taxa}), \qquad \text{taxa} = 0{,}03\ \text{por ano}$$
+
+O tempo observado passa a ser $\min(T_i,\ C_i^{\text{adm}},\ C_i)$ e `evento = 1` só quando o mínimo é $T_i$. A coluna `motivo_censura` registra qual venceu, e `fim_observacao_anos` guarda o fim do acompanhamento — é ele que o gerador de eventos recorrentes usa como limite, para que os dois arquivos contem a mesma história.
+
+**Por que exponencial.** É a distribuição sem memória: a chance de a usina sair da observação no próximo ano não depende de quanto tempo ela já operou. É a premissa mais simples e a mais defensável quando não se tem um modelo do processo de saída. A taxa de 0,03/ano dá tempo médio de 33 anos até a perda — com ~6 anos de acompanhamento médio no parque atual, isso tira **10,9% das usinas** (203 de 1.854). `--taxa-censura-aleatoria 0` desliga.
+
+| Motivo | Usinas |
+|---|---|
+| Evento observado | 818 |
+| Censura administrativa (fim do retrato) | 833 |
+| Perda de acompanhamento | 203 |
+
+**A independência é por construção.** `C` é sorteado num fluxo aleatório próprio, sem olhar para `T`, para as covariáveis nem para a fragilidade. É exatamente a premissa que Kaplan-Meier e Cox exigem — censura *informativa*, por exemplo tirar da observação justo as usinas prestes a falhar, enviesaria tudo e **não** é o que este gerador faz.
+
+Um detalhe que engana: entre as usinas perdidas, a fragilidade média é 0,87 contra 1,03 nas demais. Parece dependência, mas não é — é efeito do **mínimo**: as usinas frágeis falham antes de serem perdidas, então ficam sub-representadas entre as perdidas. `C` continua independente de `T`; o que difere é a composição do que se observa.
+
+#### Verificação: a censura independente não enviesa
+
+Gerando o mesmo conjunto com três taxas, a estimativa Kaplan-Meier de $S(5)$ praticamente não se move, embora o número de eventos caia 27%:
+
+| Taxa de censura aleatória | 0,00 | 0,03 | 0,10 |
+|---|---|---|---|
+| Eventos | 916 | 818 | 672 |
+| Perdidas por acompanhamento | 0 | 203 | 525 |
+| KM eólica, $\hat S(3)$ | 0,634 | 0,638 | 0,641 |
+| KM solar, $\hat S(3)$ | 0,767 | 0,767 | 0,762 |
+| Cox, $\hat\beta$ da potência | +0,158 | +0,134 | +0,108 |
+| Erro-padrão desse $\beta$ | 0,053 | 0,055 | 0,059 |
+
+$\hat S(3)$ é estável porque o estimador **corrige** pela censura. O $\hat\beta$ oscila, mas dentro de um erro-padrão, e os três ICs contêm o valor verdadeiro (0,20) — a deriva é ruído amostral, não viés. O preço da censura é **precisão**, não correção: menos eventos, erro-padrão maior.
+
+A mediana de sobrevivência é menos estável (4,26 → 4,40 → 4,48 anos na eólica) porque fica na cauda, onde restam poucas usinas em risco. Também é variância, não viés, mas convém não ler mediana de KM como número preciso.
 
 ---
 
@@ -394,20 +437,20 @@ Invariantes verificados na geração atual:
 
 ### Perfil do conjunto gerado
 
-4.116 episódios de 1.854 usinas, com 2.262 eventos.
+3.673 episódios de 1.854 usinas, com 1.819 eventos.
 
 | Eventos na usina | Usinas |
 |---|---|
-| 0 | 938 |
-| 1 | 417 |
-| 2 a 3 | 326 |
-| 4 ou mais | 173 |
+| 0 | 1.036 |
+| 1 | 409 |
+| 2 a 3 | 284 |
+| 4 ou mais | 125 |
 
-Média de 1,22 evento por usina — 1,75 na eólica e 0,40 na solar. A cauda é mais longa do que seria sem fragilidade: uma usina chega a 22 manutenções, e são as usinas de `Z` alto que ocupam o topo. A deterioração aparece no encurtamento dos intervalos entre manutenções:
+Média de 0,98 evento por usina — 1,41 na eólica e 0,32 na solar. O acompanhamento de cada usina termina no menor entre o retrato e a perda de acompanhamento ([§7.4](#74-censura-aleatória-independente)), o que encurta os processos. A cauda é mais longa do que seria sem fragilidade: uma usina chega a 22 manutenções, e são as usinas de `Z` alto que ocupam o topo. A deterioração aparece no encurtamento dos intervalos entre manutenções:
 
 | Episódio | 1 | 2 | 3 | 4 | 5 | 6 |
 |---|---|---|---|---|---|---|
-| Gap médio (anos) | 3,38 | 2,69 | 2,35 | 1,90 | 1,73 | 1,41 |
+| Gap médio (anos) | 3,23 | 2,67 | 2,18 | 1,75 | 1,65 | 1,54 |
 
 **A deterioração satura no 10º episódio** (`SATURACAO_DETERIORACAO`). Sem isso, uma usina antiga de fragilidade alta combinaria `Z = 5` com 20 reparos acumulados e produziria centenas de eventos — o gerador produziria, mas nenhuma operação real. Foi um problema concreto: na primeira versão com fragilidade, uma usina bateu na trava de 60 episódios.
 
@@ -464,7 +507,8 @@ Junto ao parquet é gravado `eventos_manutencao_simulados.meta.json`:
   "referencias_centralizacao": {"potencia_mw": 30.0, "ano_entrada": 2018},
   "tipos_evento": { "...": "..." },
   "n_usinas": 1854,
-  "n_eventos": 916
+  "n_eventos": 818,
+  "censura": {"mecanismos": ["administrativa", "aleatoria_exponencial_independente"], "distribuicao": {"administrativa": 833, "evento": 818, "perda_acompanhamento": 203}}
 }
 ```
 
@@ -482,9 +526,11 @@ Execução com `seed = 42`, sobre o bruto ANEEL de 18/09/2026.
 
 | Fonte | Usinas | Eventos | Censuradas | % censura | Potência mediana |
 |---|---|---|---|---|---|
-| Eólica | 1.123 | 733 | 390 | 34,7% | 29,7 MW |
-| Solar | 731 | 183 | 548 | 75,0% | 32,0 MW |
-| **Total** | **1.854** | **916** | **938** | **50,6%** | — |
+| Eólica | 1.123 | 653 | 470 | 41,9% | 29,7 MW |
+| Solar | 731 | 165 | 566 | 77,4% | 32,0 MW |
+| **Total** | **1.854** | **818** | **1.036** | **55,9%** | — |
+
+Da censura total, 833 usinas são censura administrativa e 203 são perda de acompanhamento ([§7.4](#74-censura-aleatória-independente)).
 
 ### 11.2 Distribuição por subsistema
 
@@ -501,8 +547,8 @@ O parque eólico está quase todo no Nordeste. **Há só uma eólica no Sudeste/
 
 | Fonte | Mediana KM | $\hat S(5\ \text{anos})$ |
 |---|---|---|
-| Eólica | 4,3 anos | 0,43 |
-| Solar | 6,6 anos | 0,59 |
+| Eólica | 4,4 anos | 0,45 |
+| Solar | 7,0 anos | 0,59 |
 
 As medianas empíricas ficam abaixo das medianas da usina de referência ([§6.1](#61-linha-de-base-por-fonte-weibull)) porque a maior parte das usinas está no NE, cujo risco é maior.
 
@@ -632,7 +678,7 @@ cph.predict_median(novas)                                   # tempo mediano até
 | 3 | `tipo_evento` independente do tempo | Não serve para riscos competitivos (Fine-Gray, cause-specific) | Gerar um tempo latente por causa e observar o mínimo |
 | 4 | ~~Linha de base igual para todas as usinas da mesma fonte~~ **Resolvido:** fragilidade gama por usina, com `theta = 0,5` ([§5.1](#51-fragilidade-frailty-gama-por-usina)) | Resta: os modelos ajustados não incluem a fragilidade, então estimam efeitos marginais atenuados | Estimador via binomial negativa já implementado ([doc da análise §14.7](../ML/doc_tecnica_analise_sobrevivencia.md#147-fragilidade-gama-por-usina)); falta um Cox com fragilidade compartilhada |
 | 5 | ~~Efeitos das covariáveis constantes no tempo~~ **Resolvido:** variante `eventos_manutencao_ph_violado.parquet` com efeito que muda no tempo ([§9.2](#92-variante-com-efeito-tempo-dependente--eventos_manutencao_ph_violadoparquet)), usada para medir o poder do teste de Schoenfeld | — | — |
-| 6 | Censura apenas administrativa | Não há perda de acompanhamento nem descomissionamento | Adicionar censura aleatória exponencial independente |
+| 6 | ~~Censura apenas administrativa~~ **Resolvido:** censura aleatória exponencial independente, a 0,03/ano, que atinge 10,9% das usinas ([§7.4](#74-censura-aleatória-independente)) | — | — |
 | 7 | População = usinas **hoje** em operação | Usinas já descomissionadas não aparecem (viés de sobrevivente no cadastro) | Pequeno para UFV/EOL, parque jovem; documentado |
 | 8 | Parâmetros são premissas de ordem de grandeza | Valores absolutos (medianas de 4–5 anos) podem não refletir o setor | Calibrar com literatura de O&M ou dados de operadores se disponíveis |
 | 9 | Subsistema derivado da UF principal | Usinas em mais de um município/UF usam só a principal | Irrelevante nesta escala |

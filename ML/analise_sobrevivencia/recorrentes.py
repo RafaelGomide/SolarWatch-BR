@@ -274,6 +274,35 @@ def _exposicao(painel: pd.DataFrame, mcf: pd.DataFrame) -> pd.DataFrame:
     return por_usina.reset_index()
 
 
+def _ajustar_nb(sm, y: np.ndarray, X: pd.DataFrame, offset: np.ndarray):
+    """Ajusta a binomial negativa pelo otimizador que chegar à melhor verossimilhança.
+
+    A escolha não é preciosismo: com o padrão do `statsmodels`, um dos conjuntos
+    testados convergia para `alpha = 0` (llf −2008,4) e o modelo declarava
+    "nenhuma heterogeneidade" num dado cuja variância das contagens era 3,1
+    vezes a média. O Newton divergia para `alpha` na casa dos milhões sem
+    convergir, e o Nelder-Mead achava o ótimo de verdade (llf −1959,4,
+    `alpha = 0,25`). Como todos otimizam a mesma função, comparar a
+    log-verossimilhança resolve — e um `alpha` estimado no zero passa a
+    significar ausência de heterogeneidade, não falha numérica.
+    """
+    melhor = None
+    for metodo in ("nm", "bfgs", "newton"):
+        try:
+            ajuste = sm.NegativeBinomial(y, X, loglike_method="nb2", offset=offset).fit(
+                disp=0, method=metodo, maxiter=2000)
+        except Exception as erro:            # otimizador pode estourar sem convergir
+            log.debug("[frailty] %s falhou: %s", metodo, erro)
+            continue
+        if not ajuste.mle_retvals.get("converged") or not np.isfinite(ajuste.llf):
+            continue
+        if melhor is None or ajuste.llf > melhor.llf:
+            melhor = ajuste
+    if melhor is None:
+        raise RuntimeError("nenhum otimizador convergiu no ajuste da binomial negativa")
+    return melhor
+
+
 def estimar_frailty_gama(painel: pd.DataFrame, mcf: pd.DataFrame) -> dict:
     """Estima a variância da fragilidade gama por usina.
 
@@ -300,7 +329,7 @@ def estimar_frailty_gama(painel: pd.DataFrame, mcf: pd.DataFrame) -> dict:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         poisson = sm.GLM(y, X, family=sm.families.Poisson(), offset=offset).fit()
-        nb = sm.NegativeBinomial(y, X, loglike_method="nb2", offset=offset).fit(disp=0)
+        nb = _ajustar_nb(sm, y, X, offset)
 
     theta = float(nb.params["alpha"])
     ic = nb.conf_int().loc["alpha"]
