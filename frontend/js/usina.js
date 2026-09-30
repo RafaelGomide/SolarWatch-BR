@@ -151,6 +151,7 @@ async function carregarSobrevivencia() {
   try {
     const dados = await buscar(`/usinas/${idUsina}/sobrevivencia`);
     destino.innerHTML = `
+      <h3 style="margin-top:0">Sobreviver sem nenhuma manutenção</h3>
       <div class="aviso" role="note">
         <span aria-hidden="true">⚠</span>
         <span><strong>Dado simulado.</strong> ${escapar(dados.aviso)}</span>
@@ -174,6 +175,55 @@ async function carregarSobrevivencia() {
   } catch (erro) {
     if (erro.status === 503 || erro.status === 404) {
       destino.innerHTML = `<p class="tabela__vazio">${escapar(erro.message)}</p>`;
+    } else {
+      mostrarErro(destino, erro);
+    }
+  }
+}
+
+/* --------------------------- manutenções esperadas ------------------------ */
+/* O card de sobrevivência responde "chega ao fim do horizonte sem NENHUMA
+   manutenção?". Este responde "QUANTAS esperar?" — a diferença entre a usina
+   nova e a que já foi reparada cinco vezes. Vem do modelo de recorrência
+   (Andersen-Gill + MCF), não do Cox de 1º evento. */
+function corDaContagem(n) {
+  if (n < 0.25) return "var(--verde-500)";
+  if (n < 0.75) return "var(--azul-500)";
+  if (n < 1.5) return "var(--roxo-500)";
+  return "var(--vermelho-500)";
+}
+
+async function carregarRecorrencia() {
+  const destino = el("recorrencia");
+  try {
+    const dados = await buscar(`/usinas/${idUsina}/recorrencia`);
+    const maximo = Math.max(...dados.horizontes.map((h) => h.manutencoes_esperadas), 0.5);
+    destino.innerHTML = `
+      <h3 style="margin-top:0">Quantas manutenções esperar</h3>
+      <div class="aviso" role="note">
+        <span aria-hidden="true">⚠</span>
+        <span><strong>Dado simulado.</strong> ${escapar(dados.aviso)}</span>
+      </div>
+      <dl class="lista-definicoes" style="margin:1rem 0">
+        <div><dt>Idade da usina</dt><dd>${fmt.decimal(dados.idade_anos)} anos</dd></div>
+        <div><dt>Taxa relativa de eventos</dt><dd>${fmt.decimal(dados.taxa_relativa)}×</dd></div>
+      </dl>
+      ${dados.horizontes.map((h) => `
+        <div class="horizonte">
+          <span class="horizonte__rotulo">${h.horizonte_meses} meses</span>
+          <div class="barra"><div class="barra__preenchimento"
+               style="width:${Math.min(100, (h.manutencoes_esperadas / maximo) * 100).toFixed(1)}%;--barra-cor:${corDaContagem(h.manutencoes_esperadas)}"></div></div>
+          <span class="horizonte__valor">${fmt.contagem(h.manutencoes_esperadas)}</span>
+        </div>`).join("")}
+      <p style="font-size:0.82rem;margin-top:0.9rem">
+        Número esperado de <strong>manutenções corretivas</strong> no período, pelo modelo
+        <code>${escapar(dados.modelo)}</code>. Ao contrário do card ao lado, aqui a usina
+        <strong>continua sob risco</strong> depois de cada reparo.
+        <span title="${escapar(dados.metodo)}" style="border-bottom:1px dotted currentColor;cursor:help">Como é calculado</span>.</p>`;
+  } catch (erro) {
+    if (erro.status === 503 || erro.status === 404) {
+      destino.innerHTML = `<h3 style="margin-top:0">Quantas manutenções esperar</h3>
+        <p class="tabela__vazio">${escapar(erro.message)}</p>`;
     } else {
       mostrarErro(destino, erro);
     }
@@ -205,6 +255,7 @@ async function iniciar() {
   carregarClima();
   carregarPrevisao();
   carregarSobrevivencia();
+  carregarRecorrencia();
 }
 
 iniciar();

@@ -38,10 +38,14 @@ export class ErroApi extends Error {
 /* ------------------------------- formatação ------------------------------- */
 const NUM = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 });
 const NUM1 = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
+// Contagens pequenas mantêm sempre uma casa: "2,0 manutenções" ao lado de "0,5"
+// lê-se como a mesma grandeza; "2" ao lado de "0,5" parece outra coisa.
+const NUM_FIXO1 = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 export const fmt = {
   inteiro: (v) => (v == null ? "—" : NUM.format(v)),
   decimal: (v) => (v == null ? "—" : NUM1.format(v)),
+  contagem: (v) => (v == null ? "—" : NUM_FIXO1.format(v)),
   /** MWh -> escala automática (MWh / GWh / TWh). */
   energia(mwh) {
     if (mwh == null) return { valor: "—", unidade: "" };

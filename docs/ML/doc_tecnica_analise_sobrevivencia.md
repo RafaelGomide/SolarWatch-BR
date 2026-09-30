@@ -548,11 +548,14 @@ Lê-se direto: a usina que teve mais eventos do que o esperado para o seu perfil
 
 É a resposta a uma pergunta que nenhum dos outros modelos responde: *quais usinas são piores do que parecem*. A saída fica em `ML/modelos/recorrentes_frailty_por_usina.parquet`.
 
-### 14.8 O que ainda não está ligado
+### 14.8 O que entrou no produto e o que ficou de fora
 
-O previsor de recorrência é treinado e salvo (`ML/modelos/sobrevivencia_recorrencia.pkl`), mas **não** é servido pela API nem aparece no frontend — o card continua sendo o de 1º evento. Ligar exigiria um endpoint novo e um segundo card, o que não foi feito aqui. Vale o mesmo para a fragilidade posterior por usina, que seria um bom sinal de alerta na tela.
+O previsor de recorrência **está servido**: `GET /usinas/{id}/recorrencia` devolve as manutenções esperadas por horizonte, e a página da usina mostra os dois cards lado a lado — "Sobreviver sem nenhuma manutenção" e "Quantas manutenções esperar" ([backend §6.7](../backend/doc_tecnica_backend.md#67-get-usinasidrecorrencia)).
 
-A fragilidade também **não** entra no modelo de produção: o Cox de 1º evento continua sem ela, e por isso seus coeficientes são os marginais, atenuados. Incluí-la exigiria um Cox com fragilidade compartilhada, que o lifelines não oferece.
+Continuam de fora:
+
+- **A fragilidade posterior por usina**, que seria um bom sinal de alerta na tela ("esta usina quebra mais do que o perfil dela explica"). Está calculada em `ML/modelos/recorrentes_frailty_por_usina.parquet`, mas não é exposta.
+- **A fragilidade dentro do modelo de produção**: o Cox de 1º evento continua sem ela, e por isso seus coeficientes são os marginais, atenuados. Incluí-la exigiria um Cox com fragilidade compartilhada, que o lifelines não oferece.
 
 ---
 
@@ -565,7 +568,7 @@ A fragilidade também **não** entra no modelo de produção: o Cox de 1º event
 | 3 | Só 93 das 308 unidades recebem previsão | Cobertura parcial do frontend | Melhorar o vínculo ONS × ANEEL ([ETL §15](../ETL/doc_tecnica_etl.md#15-limitações-conhecidas-e-próximos-passos)) |
 | 4 | Efeitos regionais imprecisos | ICs largos, estimativas distantes | Inerente à geografia do parque; só mais dados resolvem |
 | 4b | Coeficientes atenuados pela fragilidade não modelada | O Cox de produção estima o efeito **marginal**, menor que o condicional ([§7.2](#72-coeficientes)) | Cox com fragilidade compartilhada (não disponível no lifelines) ou estimação via NB, como na [§14.7](#147-fragilidade-gama-por-usina) |
-| 5 | ~~Um evento por usina~~ **Resolvido:** Andersen-Gill e PWP ajustados sobre o painel de episódios ([§14](#14-eventos-recorrentes-andersen-gill-e-pwp)) | Resta: o produto servido pela API é só o de 1º evento | Endpoint e card de manutenções esperadas ([§14.7](#147-o-que-ainda-não-está-ligado)) |
+| 5 | ~~Um evento por usina~~ **Resolvido:** Andersen-Gill e PWP sobre o painel de episódios ([§14](#14-eventos-recorrentes-andersen-gill-e-pwp)), servidos em `/usinas/{id}/recorrencia` e num card próprio | Resta: a fragilidade por usina não é exposta na API | Expor `frailty_posterior` como sinal de alerta ([§14.8](#148-o-que-entrou-no-produto-e-o-que-ficou-de-fora)) |
 | 6 | Sem intervalo na probabilidade | O card mostra um ponto | Bootstrap sobre os coeficientes do Cox para banda de confiança |
 | 7 | Extrapolação Weibull não validada | 21 usinas dependem dela, fora do suporte observado | Por definição não há dado para validar; sinalizar no frontend quando `metodo_extrapolacao = "weibull"` |
 | 8 | Sem testes automatizados | Regressões silenciosas | `pytest`: invariantes da carga, probabilidade em [0,1], monotonicidade em relação ao horizonte, e o caso do [§10](#10-o-bug-da-extrapolação-e-como-foi-resolvido) (usina antiga não pode dar 1,00) |

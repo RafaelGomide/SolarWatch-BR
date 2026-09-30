@@ -5,8 +5,9 @@ continuam funcionando normalmente e **apenas** os endpoints dependentes daquele
 modelo respondem 503 com Problem Details. O processo nunca cai por causa disso.
 
 Modelos:
-- `sobrevivencia_cox.pkl`  → P(sem manutenção em N meses), por usina;
-- `previsao_<fonte>.pkl`   → geração horária das próximas 24 h, por fonte.
+- `sobrevivencia_cox.pkl`          → P(sem manutenção em N meses), por usina;
+- `sobrevivencia_recorrencia.pkl`  → nº esperado de manutenções em N meses, por usina;
+- `previsao_<fonte>.pkl`           → geração horária das próximas 24 h, por fonte.
 
 O unpickle precisa que as classes originais sejam importáveis
 (`ML.analise_sobrevivencia.modelos`, `ML.series_temporais.modelos`), por isso a
@@ -34,18 +35,25 @@ class RegistroModelos:
 
     def __init__(self) -> None:
         self.sobrevivencia: Any | None = None
+        self.recorrencia: Any | None = None
         self.previsao: dict[str, Any] = {}
         self.metadados: dict[str, dict] = {}   # do .meta.json gravado junto do pickle
         self.probabilidades: pd.DataFrame | None = None
+        self.esperadas: pd.DataFrame | None = None
         self.falhas: dict[str, str] = {}
 
     # ------------------------------------------------------------------ carga
     def carregar(self, pasta: Path, nome_sobrevivencia: str, padrao_previsao: str,
-                 nome_probabilidades: str) -> None:
+                 nome_probabilidades: str, nome_recorrencia: str | None = None,
+                 nome_esperadas: str | None = None) -> None:
         self._carregar_sobrevivencia(pasta / nome_sobrevivencia)
         for fonte in FONTES_PREVISAO:
             self._carregar_previsao(fonte, pasta / padrao_previsao.format(fonte=fonte))
         self._carregar_probabilidades(pasta / nome_probabilidades)
+        if nome_recorrencia:
+            self._carregar_recorrencia(pasta / nome_recorrencia)
+        if nome_esperadas:
+            self._carregar_esperadas(pasta / nome_esperadas)
 
     @staticmethod
     def _meta(caminho: Path) -> dict:
@@ -65,6 +73,26 @@ class RegistroModelos:
         except Exception as erro:
             self.falhas["sobrevivencia"] = f"{type(erro).__name__}: {erro}"
             log.warning("[modelos] sobrevivência indisponível: %s", erro)
+
+    def _carregar_recorrencia(self, caminho: Path) -> None:
+        try:
+            self.recorrencia = joblib.load(caminho)
+            self.metadados["recorrencia"] = self._meta(caminho)
+            log.info("[modelos] recorrência carregada (%s, horizontes %s)",
+                     caminho.name, self.recorrencia.horizontes_meses)
+        except Exception as erro:
+            self.falhas["recorrencia"] = f"{type(erro).__name__}: {erro}"
+            log.warning("[modelos] recorrência indisponível: %s", erro)
+
+    def _carregar_esperadas(self, caminho: Path) -> None:
+        """Tabela pré-calculada de manutenções esperadas, análoga às probabilidades."""
+        try:
+            self.esperadas = pd.read_parquet(caminho).set_index("usina_id")
+            log.info("[modelos] manutenções esperadas pré-calculadas: %d usinas",
+                     len(self.esperadas))
+        except Exception as erro:
+            self.falhas["esperadas"] = f"{type(erro).__name__}: {erro}"
+            log.warning("[modelos] manutenções esperadas indisponíveis: %s", erro)
 
     def _carregar_previsao(self, fonte: str, caminho: Path) -> None:
         try:
@@ -91,6 +119,10 @@ class RegistroModelos:
     def sobrevivencia_disponivel(self) -> bool:
         return self.sobrevivencia is not None or self.probabilidades is not None
 
+    @property
+    def recorrencia_disponivel(self) -> bool:
+        return self.recorrencia is not None or self.esperadas is not None
+
     def previsao_disponivel(self, fonte: str) -> bool:
         return fonte in self.previsao
 
@@ -98,6 +130,8 @@ class RegistroModelos:
         return {
             "sobrevivencia": self.sobrevivencia is not None,
             "probabilidades_pre_calculadas": self.probabilidades is not None,
+            "recorrencia": self.recorrencia is not None,
+            "esperadas_pre_calculadas": self.esperadas is not None,
             "previsao": {f: f in self.previsao for f in FONTES_PREVISAO},
             "falhas": self.falhas,
         }

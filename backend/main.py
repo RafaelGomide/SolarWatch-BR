@@ -44,7 +44,8 @@ async def ciclo_de_vida(app: FastAPI):
 
     db.abrir(cfg.banco)
     registro.carregar(cfg.modelos, cfg.modelo_sobrevivencia, cfg.modelo_previsao,
-                      cfg.probabilidades_sobrevivencia)
+                      cfg.probabilidades_sobrevivencia, cfg.modelo_recorrencia,
+                      cfg.esperadas_recorrencia)
     if registro.falhas:
         log.warning("[startup] modo degradado: %s", list(registro.falhas))
 

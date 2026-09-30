@@ -172,7 +172,7 @@ Recebe `?id=` na URL. Sem id, mostra uma mensagem explicando o formato esperado.
 | Geração medida | Gráfico horário com seletor de 7/15/30/60 dias e resumo (total + horas sem medição) | `/usinas/{id}/geracao` |
 | Clima | Irradiância (solar) **ou** vento a 50 m (eólica), mais temperatura | `/usinas/{id}/clima` |
 | Previsão de 24 h | Linha tracejada + nota explicando o rateio | `/usinas/{id}/previsao` |
-| Sobrevivência | Banner de dado simulado, idade/risco/tempo mediano e 4 barras de probabilidade | `/usinas/{id}/sobrevivencia` |
+| Manutenção corretiva | **Dois cards lado a lado.** À esquerda, "Sobreviver sem nenhuma manutenção": banner de dado simulado, idade/risco/tempo mediano e 4 barras de probabilidade. À direita, "Quantas manutenções esperar": idade, taxa relativa e 4 barras de contagem | `/usinas/{id}/sobrevivencia` e `/usinas/{id}/recorrencia` |
 
 O gráfico de clima **muda conforme a fonte**: irradiância é a variável que explica geração solar; vento a 50 m é a que explica eólica. Mostrar as duas sempre seria ruído.
 
@@ -236,7 +236,8 @@ O projeto tem ressalvas reais, e a interface as mostra em vez de escondê-las at
 
 | Ressalva | Como aparece |
 |---|---|
-| Eventos de manutenção são simulados | Banner vermelho no topo do card de sobrevivência, aviso no rodapé de todas as páginas e seção na metodologia |
+| Eventos de manutenção são simulados | Banner vermelho no topo de **cada um dos dois cards** de manutenção, aviso no rodapé de todas as páginas e seção na metodologia |
+| O número esperado de manutenções é uma aproximação | Tooltip "Como é calculado" no card de recorrência, com o texto vindo do campo `metodo` da API |
 | 212 das 308 unidades sem potência confiável | Etiqueta "sem cadastro" na tabela e "cadastro parcial" na página da usina, com link para o critério |
 | Previsão por usina é um rateio | Nota abaixo do gráfico, com a participação exata (ex.: "rateio de 0,55% da previsão da fonte") |
 | Clima é do ponto mais próximo, não da usina | "Ponto `caetite_ba` · 7 km da usina · vínculo mais_proximo" |

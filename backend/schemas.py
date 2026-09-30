@@ -141,6 +141,26 @@ class Sobrevivencia(BaseModel):
     horizontes: list[ProbabilidadeHorizonte]
 
 
+class ManutencoesHorizonte(BaseModel):
+    horizonte_meses: int
+    horizonte_dias: int
+    manutencoes_esperadas: float = Field(
+        description="Número esperado de manutenções corretivas no horizonte, não uma probabilidade")
+
+
+class Recorrencia(BaseModel):
+    usina_id: int
+    fonte: Fonte
+    idade_anos: float | None
+    taxa_relativa: float | None = Field(
+        None, description="Taxa de eventos da usina face à usina de referência (Andersen-Gill)")
+    modelo: str = Field("andersen_gill + MCF", description="Modelos combinados na estimativa")
+    metodo: str = Field(description="Como o número é produzido, incluindo a aproximação assumida")
+    simulado: bool = Field(True, description="SEMPRE verdadeiro: os eventos de manutenção são sintéticos")
+    aviso: str
+    horizontes: list[ManutencoesHorizonte]
+
+
 class Saude(BaseModel):
     status: Literal["ok", "degradado"]
     versao: str

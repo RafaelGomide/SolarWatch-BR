@@ -39,8 +39,10 @@ class Configuracao(BaseSettings):
 
     # Modelos de ML
     modelo_sobrevivencia: str = "sobrevivencia_cox.pkl"
+    modelo_recorrencia: str = "sobrevivencia_recorrencia.pkl"
     modelo_previsao: str = "previsao_{fonte}.pkl"
     probabilidades_sobrevivencia: str = "sobrevivencia_probabilidades_por_usina.parquet"
+    esperadas_recorrencia: str = "recorrentes_esperadas_por_usina.parquet"
 
     @property
     def url_erros(self) -> str:

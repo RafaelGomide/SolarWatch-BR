@@ -62,7 +62,7 @@ def test_toda_resposta_tem_request_id(cliente):
 def test_openapi_expoe_os_endpoints_versionados(cliente):
     caminhos = cliente.get("/openapi.json").json()["paths"]
     for rota in ["/usinas", "/usinas/{usina_id}/geracao", "/usinas/{usina_id}/sobrevivencia",
-                 "/geracao/nacional"]:
+                 "/usinas/{usina_id}/recorrencia", "/geracao/nacional"]:
         assert f"{PREFIXO}{rota}" in caminhos
 
 
@@ -184,6 +184,53 @@ def test_sobrevivencia_avisa_que_o_dado_e_simulado(cliente, uma_usina):
     assert all(0 <= p <= 1 for p in probabilidades)
     # quanto maior o horizonte, menor (ou igual) a probabilidade de sobreviver
     assert probabilidades == sorted(probabilidades, reverse=True)
+
+
+def test_recorrencia_devolve_contagem_esperada_crescente(cliente, uma_usina):
+    """Ao contrário da sobrevivência, aqui o número CRESCE com o horizonte: é uma
+    contagem acumulada de manutenções, não uma probabilidade."""
+    resposta = cliente.get(f"{PREFIXO}/usinas/{uma_usina['usina_id']}/recorrencia")
+    if resposta.status_code == 503:
+        pytest.skip("modelo de recorrência indisponível")
+    corpo = resposta.json()
+    assert corpo["simulado"] is True
+    assert "SINTÉTICOS" in corpo["aviso"]
+    assert corpo["horizontes"], "esperava ao menos um horizonte"
+
+    esperadas = [h["manutencoes_esperadas"] for h in corpo["horizontes"]]
+    assert all(n >= 0 for n in esperadas), "contagem esperada não pode ser negativa"
+    assert esperadas == sorted(esperadas), "a contagem acumulada não pode diminuir"
+    assert corpo["taxa_relativa"] > 0
+
+
+def test_recorrencia_e_sobrevivencia_contam_a_mesma_historia(cliente, uma_usina):
+    """Coerência entre os dois cards: se o número esperado de manutenções é alto,
+    a probabilidade de passar o período sem nenhuma tem que ser baixa."""
+    usina_id = uma_usina["usina_id"]
+    rec = cliente.get(f"{PREFIXO}/usinas/{usina_id}/recorrencia")
+    sob = cliente.get(f"{PREFIXO}/usinas/{usina_id}/sobrevivencia")
+    if rec.status_code == 503 or sob.status_code == 503:
+        pytest.skip("modelos indisponíveis")
+
+    por_horizonte = {h["horizonte_meses"]: h["manutencoes_esperadas"] for h in rec.json()["horizontes"]}
+    for horizonte in sob.json()["horizontes"]:
+        esperadas = por_horizonte.get(horizonte["horizonte_meses"])
+        if esperadas is None:
+            continue
+        p_zero = horizonte["probabilidade_sobrevivencia"]
+        # P(nenhum evento) <= P(nenhum evento sob Poisson com a mesma média) não
+        # vale exatamente (o processo não é Poisson), mas as duas grandezas têm
+        # que andar no mesmo sentido: muita manutenção esperada, pouca chance de zero.
+        if esperadas >= 1.0:
+            assert p_zero < 0.75, f"{esperadas:.2f} manutenções esperadas com P(zero)={p_zero:.2f}"
+
+
+def test_recorrencia_aceita_horizontes_customizados(cliente, uma_usina):
+    resposta = cliente.get(f"{PREFIXO}/usinas/{uma_usina['usina_id']}/recorrencia",
+                           params={"horizontes": [3, 18]})
+    if resposta.status_code == 503:
+        pytest.skip("modelo de recorrência indisponível")
+    assert [h["horizonte_meses"] for h in resposta.json()["horizontes"]] == [3, 18]
 
 
 def test_modelo_indisponivel_degrada_so_o_endpoint_dependente(cliente, uma_usina, monkeypatch):

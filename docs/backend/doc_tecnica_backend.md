@@ -46,7 +46,7 @@ pickles de ML ────┘
 | Rotas no OpenAPI | 12 |
 | Formato de erro | RFC 9457 (Problem Details) |
 | Banco | `DB/solarwatch.duckdb`, aberto read-only |
-| Modelos | 3 pickles (`previsao_solar`, `previsao_eolica`, `sobrevivencia_cox`) |
+| Modelos | 4 pickles (`previsao_solar`, `previsao_eolica`, `sobrevivencia_cox`, `sobrevivencia_recorrencia`) |
 | Testes | 24, todos passando |
 
 ---
@@ -215,7 +215,33 @@ Três campos existem para não enganar quem consome:
 
 O endpoint usa a tabela pré-calculada quando a usina está nela (rápido) e roda o modelo quando há horizontes customizados via `?horizontes=3&horizontes=9`.
 
-### 6.7 `GET /health` e `GET /metrics`
+### 6.7 `GET /usinas/{id}/recorrencia`
+
+```json
+{
+  "usina_id": 12, "fonte": "eolica", "idade_anos": 11.99,
+  "taxa_relativa": 1.65, "modelo": "andersen_gill + MCF",
+  "metodo": "Número esperado = [MCF da fonte no horizonte] × exp(β do Andersen-Gill · x) ...",
+  "simulado": true, "aviso": "Os eventos de manutenção ... são SINTÉTICOS ...",
+  "horizontes": [
+    {"horizonte_meses": 6,  "horizonte_dias": 183, "manutencoes_esperadas": 0.237},
+    {"horizonte_meses": 12, "horizonte_dias": 365, "manutencoes_esperadas": 0.546}
+  ]
+}
+```
+
+**É a outra metade da pergunta.** O `/sobrevivencia` responde *"a usina chega ao fim do horizonte sem **nenhuma** manutenção?"* e, depois da primeira, não tem mais nada a dizer — trata como iguais a usina nova e a que já foi reparada cinco vezes. Este responde *"**quantas** manutenções esperar?"*, com a usina permanecendo sob risco depois de cada reparo. Vem do modelo de recorrência (Andersen-Gill + função média cumulativa, [sobrevivência §14](../ML/doc_tecnica_analise_sobrevivencia.md#14-eventos-recorrentes-andersen-gill-e-pwp)), não do Cox de 1º evento.
+
+Duas diferenças de contrato que valem atenção de quem consome:
+
+- `manutencoes_esperadas` é uma **contagem**, não uma probabilidade: pode passar de 1 e **cresce** com o horizonte, ao contrário de `probabilidade_sobrevivencia`, que decresce. Há um teste que trava cada um desses sentidos.
+- `metodo` carrega a aproximação assumida no próprio payload: o multiplicador da usina é aplicado sobre uma média marginal da fonte, então o número serve para **ordenar** usinas e dar ordem de grandeza, não como compromisso de contagem. O frontend mostra esse texto no *tooltip* de "Como é calculado".
+
+Os dois endpoints são coerentes entre si, e isso é testado: quando a contagem esperada passa de 1,0, a probabilidade de zero manutenções tem que estar abaixo de 0,75. Para a usina 12, 0,55 manutenção esperada em 12 meses convive com 67% de chance de nenhuma — a leitura de Poisson daria e^(−0,55) ≈ 0,58, e a diferença é justamente o que o processo de renovação tem de diferente do Poisson.
+
+Como o `/sobrevivencia`, usa a tabela pré-calculada quando a usina está nela e roda o modelo quando há horizontes customizados.
+
+### 6.8 `GET /health` e `GET /metrics`
 
 `/health` devolve `ok` ou `degradado`, a cobertura do banco e o estado de cada modelo. `/metrics` devolve texto no formato Prometheus. Os dois ficam **fora** do rate limit, para não bloquear monitoramento.
 
@@ -329,12 +355,13 @@ São contadores em memória, sem dependência externa: o orçamento zero não co
 
 System design §10.5: se um modelo falhar, a API **não** cai — só os endpoints dependentes respondem 503.
 
-| Situação | `/usinas`, `/geracao` | `/previsao` | `/sobrevivencia` | `/health` |
-|---|---|---|---|---|
-| Tudo ok | 200 | 200 | 200 | `ok` |
-| Pickle de previsão ausente | 200 | **503** | 200 | `degradado` |
-| Pickle de sobrevivência ausente | 200 | 200 | **503** | `degradado` |
-| Banco ausente | startup falha com instrução | — | — | — |
+| Situação | `/usinas`, `/geracao` | `/previsao` | `/sobrevivencia` | `/recorrencia` | `/health` |
+|---|---|---|---|---|---|
+| Tudo ok | 200 | 200 | 200 | 200 | `ok` |
+| Pickle de previsão ausente | 200 | **503** | 200 | 200 | `degradado` |
+| Pickle de sobrevivência ausente | 200 | 200 | **503** | 200 | `degradado` |
+| Pickle de recorrência ausente | 200 | 200 | 200 | **503** | `degradado` |
+| Banco ausente | startup falha com instrução | — | — | — | — |
 
 O 503 traz no `detail` o motivo real (`FileNotFoundError: ...`), o que encurta o diagnóstico. Há um teste que remove o modelo em tempo de execução e confirma os dois lados: 503 no endpoint do modelo e 200 no endpoint histórico.
 
@@ -368,6 +395,7 @@ Uvicorn local, melhor de 3 execuções:
 | `/usinas?limit=50` | 33 ms | ✅ |
 | `/usinas/12/geracao` (15 dias) | 62 ms | ⚠️ |
 | `/usinas/12/sobrevivencia` | 27 ms | ✅ |
+| `/usinas/12/recorrencia` | 25 ms | ✅ |
 | `/geracao/previsao?fonte=solar` | 97 ms | ❌ |
 | `/geracao/nacional?granularidade=dia` | 170 ms | ❌ |
 

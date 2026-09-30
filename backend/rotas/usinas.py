@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from backend import servicos, servicos_ml
 from backend.config import configuracao
 from backend.db import conexao
-from backend.schemas import (PaginaUsinas, Previsao, SerieClima, SerieGeracao, Sobrevivencia,
+from backend.schemas import (PaginaUsinas, Previsao, Recorrencia, SerieClima, SerieGeracao, Sobrevivencia,
                              UsinaDetalhe)
 
 roteador = APIRouter(prefix="/usinas", tags=["usinas"])
@@ -75,3 +75,16 @@ def sobrevivencia(
     cur: duckdb.DuckDBPyConnection = Depends(conexao),
 ):
     return servicos_ml.sobrevivencia(cur, usina_id, horizontes)
+
+
+@roteador.get("/{usina_id}/recorrencia", response_model=Recorrencia,
+              summary="Número esperado de manutenções corretivas (DADO SIMULADO)")
+def recorrencia(
+    usina_id: int = ID_USINA,
+    horizontes: list[int] | None = Query(None, description="Horizontes em meses (padrão: 6 12 24 36)"),
+    cur: duckdb.DuckDBPyConnection = Depends(conexao),
+):
+    """Enquanto `/sobrevivencia` responde "chega ao fim do horizonte sem nenhuma
+    manutenção?", este responde **quantas** esperar — a pergunta que o modelo de
+    1º evento não consegue responder."""
+    return servicos_ml.recorrencia(cur, usina_id, horizontes)

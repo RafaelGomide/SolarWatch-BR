@@ -24,6 +24,11 @@ AVISO_SIMULADO = (
     "(ML/analise_sobrevivencia/dados_simulados.py). O número não representa a "
     "confiabilidade real da usina."
 )
+METODO_RECORRENCIA = (
+    "Número esperado = [MCF da fonte no horizonte] × exp(β do Andersen-Gill · x). "
+    "O multiplicador da usina é aplicado sobre uma média marginal da fonte, então o valor "
+    "serve para ordenar usinas e dar ordem de grandeza, não como compromisso de contagem."
+)
 PREMISSA_CLIMA = (
     "O clima do horizonte é aproximado pelo último dia observado: em produção "
     "entraria uma previsão meteorológica."
@@ -97,6 +102,66 @@ def prever_usina(cur: duckdb.DuckDBPyConnection, usina_id: int) -> dict:
 
 
 # ------------------------------------------------------------ Sobrevivência
+def recorrencia(cur: duckdb.DuckDBPyConnection, usina_id: int,
+                horizontes_meses: list[int] | None = None) -> dict:
+    """Manutenções esperadas nos horizontes pedidos, dada a idade da usina.
+
+    Complementa `/sobrevivencia`: lá a pergunta é "chega ao fim do horizonte sem
+    NENHUMA manutenção?"; aqui é "QUANTAS manutenções esperar?". A segunda é a
+    que distingue a usina nova da que já foi reparada cinco vezes.
+    """
+    usina = obter_usina(cur, usina_id)
+
+    # Caminho rápido: tabela pré-calculada pelo treino, quando serve o pedido
+    pre = registro.esperadas
+    if pre is not None and usina_id in pre.index and not horizontes_meses:
+        linha = pre.loc[usina_id]
+        horizontes = [
+            {"horizonte_meses": (meses := int(coluna.split("_")[-1].rstrip("m"))),
+             "horizonte_dias": int(round(meses * 30.44)),
+             "manutencoes_esperadas": float(linha[coluna])}
+            for coluna in pre.columns if coluna.startswith("manutencoes_esperadas_")
+        ]
+        return {
+            "usina_id": usina_id, "fonte": usina["fonte"],
+            "idade_anos": float(linha["idade_anos"]),
+            "taxa_relativa": float(linha["taxa_relativa"]),
+            "modelo": "andersen_gill + MCF", "metodo": METODO_RECORRENCIA,
+            "simulado": True, "aviso": AVISO_SIMULADO,
+            "horizontes": sorted(horizontes, key=lambda h: h["horizonte_meses"]),
+        }
+
+    # Caminho completo: roda o modelo
+    if registro.recorrencia is None:
+        raise _indisponivel("recorrencia")
+    if usina["potencia_mw"] is None or usina["data_operacao"] is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"A usina {usina_id} não tem potência ou data de operação confiáveis "
+            "(vínculo ONS×ANEEL incompleto), então não é possível estimar as manutenções.")
+
+    previsor = registro.recorrencia
+    entrada = _covariaveis(usina)
+    if horizontes_meses:
+        previsor = type(previsor)(previsor.andersen_gill, previsor.mcf,
+                                  tuple(horizontes_meses), previsor.metadados)
+    resultado = previsor.prever(entrada).iloc[0]
+
+    return {
+        "usina_id": usina_id, "fonte": usina["fonte"],
+        "idade_anos": float(entrada["idade_anos"].iat[0]),
+        "taxa_relativa": float(resultado["taxa_relativa"]),
+        "modelo": "andersen_gill + MCF", "metodo": METODO_RECORRENCIA,
+        "simulado": True, "aviso": AVISO_SIMULADO,
+        "horizontes": [
+            {"horizonte_meses": meses,
+             "horizonte_dias": int(round(meses * 30.44)),
+             "manutencoes_esperadas": float(resultado[f"manutencoes_esperadas_{meses}m"])}
+            for meses in previsor.horizontes_meses
+        ],
+    }
+
+
 def _covariaveis(usina: dict) -> pd.DataFrame:
     data_operacao = pd.Timestamp(usina["data_operacao"])
     subsistema = usina["regiao"]
