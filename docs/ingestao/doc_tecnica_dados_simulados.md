@@ -129,6 +129,43 @@ O conjunto simulado **não carrega** `NomEmpreendimento` nem `DscPropriRegimePar
 
 ---
 
+### 4.4 Viés de sobrevivente: quem já não está no cadastro
+
+A população de treino são as usinas **em operação hoje**. As que já foram descomissionadas não estão no SIGA — e, se as descomissionadas fossem justamente as que mais quebravam, o modelo aprenderia com uma amostra seletivamente boa e subestimaria o risco. É o viés de sobrevivente clássico, e vale quantificá-lo em vez de afirmar que é pequeno.
+
+**O cadastro não registra a saída.** As únicas fases que o SIGA usa para UFV/EOL são `Operação`, `Construção` e `Construção não iniciada`. Não há "Desativada" nem equivalente: a usina simplesmente deixa de aparecer. Por isso não dá para contar as que faltam — só dá para limitar quantas poderiam ser.
+
+**O parque é jovem demais para ter perdido muita gente.** Idade das usinas em operação no retrato de 18/09/2026:
+
+| | Eólica | Solar |
+|---|---|---|
+| Idade mediana | 7,7 anos | 4,7 anos |
+| Idade máxima | 27,8 anos | 25,3 anos |
+
+| Usinas com mais de… | 15 anos | 20 anos | 25 anos | 30 anos |
+|---|---|---|---|---|
+| Quantidade (de 18.387) | 99 | 10 | 5 | **0** |
+| Percentual | 0,5% | 0,1% | 0,03% | 0% |
+
+Três quartos das usinas entraram em operação **nos anos 2020**. Com vida de projeto de 20 a 30 anos para UFV e EOL, quase nenhuma usina do parque atual chegou à idade em que o descomissionamento seria esperado. Na base simulada (que exige 1 MW e data plausível), só **53 usinas de 1.854 (2,9%)** têm 15 anos ou mais, e apenas 6 passam de 20.
+
+#### Quanto o viés poderia mover, no pior caso
+
+`python -m ML.analise_sobrevivencia.diagnosticos --sobrevivente` faz uma análise de sensibilidade de **limite superior**: supõe que a coorte antiga (15+ anos) perdeu uma fração `f` de usinas e que **todas elas eram as piores** — falharam cedo, no primeiro quartil dos tempos da coorte (1,9 ano). Qualquer cenário real é menos severo.
+
+| Fração perdida da coorte antiga | 0% | 5% | 10% | 20% | **50%** |
+|---|---|---|---|---|---|
+| Usinas repostas | 0 | 3 | 5 | 11 | 26 |
+| Mediana KM eólica (anos) | 4,397 | 4,390 | 4,389 | 4,335 | **4,248** |
+| $\hat S(5)$ eólica | 0,446 | 0,445 | 0,444 | 0,441 | **0,435** |
+| $\hat\beta$ da potência | 0,134 | 0,136 | 0,140 | 0,132 | **0,122** |
+
+Mesmo no cenário absurdo de **metade da coorte antiga ter sumido, toda ela por falhar cedo**, a mediana da eólica cai 3,4% (de 4,40 para 4,25 anos) e $\hat S(5)$ cai 1,1 ponto percentual. No cenário plausível de 10%, o deslocamento é de **3 dias na mediana** e 0,002 em $\hat S(5)$ — menor que a largura do IC por uma ordem de grandeza. A solar não se move: ela praticamente não tem coorte antiga.
+
+**Conclusão:** o viés existe conceitualmente, mas nesta população ele é pequeno — não por hipótese, e sim porque a coorte que poderia ter sido perdida tem 53 usinas. O quadro muda quando o parque envelhecer: daqui a dez anos, com milhares de usinas passando dos 20 anos, esta mesma conta precisa ser refeita.
+
+---
+
 ## 5. Modelo gerador: Weibull de riscos proporcionais
 
 ### 5.1 Função de risco
@@ -679,7 +716,7 @@ cph.predict_median(novas)                                   # tempo mediano até
 | 4 | ~~Linha de base igual para todas as usinas da mesma fonte~~ **Resolvido:** fragilidade gama por usina, com `theta = 0,5` ([§5.1](#51-fragilidade-frailty-gama-por-usina)) | Resta: os modelos ajustados não incluem a fragilidade, então estimam efeitos marginais atenuados | Estimador via binomial negativa já implementado ([doc da análise §14.7](../ML/doc_tecnica_analise_sobrevivencia.md#147-fragilidade-gama-por-usina)); falta um Cox com fragilidade compartilhada |
 | 5 | ~~Efeitos das covariáveis constantes no tempo~~ **Resolvido:** variante `eventos_manutencao_ph_violado.parquet` com efeito que muda no tempo ([§9.2](#92-variante-com-efeito-tempo-dependente--eventos_manutencao_ph_violadoparquet)), usada para medir o poder do teste de Schoenfeld | — | — |
 | 6 | ~~Censura apenas administrativa~~ **Resolvido:** censura aleatória exponencial independente, a 0,03/ano, que atinge 10,9% das usinas ([§7.4](#74-censura-aleatória-independente)) | — | — |
-| 7 | População = usinas **hoje** em operação | Usinas já descomissionadas não aparecem (viés de sobrevivente no cadastro) | Pequeno para UFV/EOL, parque jovem; documentado |
+| 7 | População = usinas **hoje** em operação | Viés de sobrevivente no cadastro | **Quantificado** ([§4.4](#44-viés-de-sobrevivente-quem-já-não-está-no-cadastro)): o SIGA não registra saída, só 2,9% das usinas têm 15+ anos, e mesmo perdendo metade dessa coorte a mediana KM se move 3,4%. Refazer a conta quando o parque envelhecer |
 | 8 | Parâmetros são premissas de ordem de grandeza | Valores absolutos (medianas de 4–5 anos) podem não refletir o setor | Calibrar com literatura de O&M ou dados de operadores se disponíveis |
 | 9 | Subsistema derivado da UF principal | Usinas em mais de um município/UF usam só a principal | Irrelevante nesta escala |
 | 10 | Tempo contado da entrada em **operação comercial** | Falhas no comissionamento não entram | Coerente com a definição de "evento de manutenção corretiva em operação" |

@@ -54,7 +54,7 @@ ML/analise_sobrevivencia/
 ├── dados.py             # carga do treino (simulado) e das usinas da predição (dim_usina)
 ├── modelos.py           # KM, paramétricos, Cox, Weibull de regressão e o Previsor
 ├── recorrentes.py       # Andersen-Gill, PWP (tempo total e gap time), MCF
-├── diagnosticos.py      # poder do teste de PH, com violação de tamanho conhecido
+├── diagnosticos.py      # poder do teste de PH e limite do viés de sobrevivente
 ├── avaliacao.py         # C-index k-fold, Schoenfeld, recuperação dos betas, calibração
 ├── treinar.py           # 1º evento: orquestra tudo, salva pickles e tabelas
 ├── treinar_recorrentes.py  # eventos recorrentes: AG, PWP, MCF e manutenções esperadas
@@ -73,6 +73,7 @@ python -m ML.analise_sobrevivencia.treinar --sem-graficos --sem-salvar
 
 python -m ML.analise_sobrevivencia.treinar_recorrentes   # eventos recorrentes (§14)
 python -m ML.analise_sobrevivencia.diagnosticos --poder  # diagnóstico de PH (§8.5)
+python -m ML.analise_sobrevivencia.diagnosticos --sobrevivente  # viés de sobrevivente
 ```
 
 | Argumento | Padrão | Efeito |
@@ -624,6 +625,7 @@ Continuam de fora:
 | # | Limitação | Impacto | Próximo passo |
 |---|---|---|---|
 | 1 | **Eventos sintéticos** | Nenhuma conclusão vale para o mundo real | Substituir pelo histórico real de O&M, se houver acesso; o pipeline não muda |
+| 1b | População = usinas hoje em operação | Viés de sobrevivente | Quantificado como pequeno nesta população ([dados simulados §4.4](../ingestao/doc_tecnica_dados_simulados.md#44-viés-de-sobrevivente-quem-já-não-está-no-cadastro)); refazer quando o parque envelhecer |
 | 2 | C-index de 0,577 | Discriminação fraca | É o teto deste gerador. Com dado real, avaliar se há sinal mais forte |
 | 3 | Só 93 das 308 unidades recebem previsão | Cobertura parcial do frontend | Melhorar o vínculo ONS × ANEEL ([ETL §15](../ETL/doc_tecnica_etl.md#15-limitações-conhecidas-e-próximos-passos)) |
 | 4 | Efeitos regionais imprecisos | ICs largos, estimativas distantes | Inerente à geografia do parque; só mais dados resolvem |

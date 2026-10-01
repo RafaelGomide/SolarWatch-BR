@@ -16,9 +16,17 @@ três coisas:
 O terceiro ponto é o que torna o diagnóstico útil: detectar que a premissa caiu
 não serve de nada se não houver o que fazer em seguida.
 
+Há ainda um segundo diagnóstico aqui, de natureza diferente: o **viés de
+sobrevivente** do cadastro (`--sobrevivente`). A população de treino são as
+usinas que estão em operação **hoje**; as que foram descomissionadas sumiram do
+SIGA e nunca entram na conta. Se as descomissionadas forem justamente as que
+mais quebravam, o modelo subestima o risco. O que o módulo faz é medir o
+tamanho possível desse efeito, em vez de afirmar que ele é pequeno.
+
 Uso:
     python -m ML.analise_sobrevivencia.diagnosticos
     python -m ML.analise_sobrevivencia.diagnosticos --sem-graficos
+    python -m ML.analise_sobrevivencia.diagnosticos --sobrevivente
 """
 
 from __future__ import annotations
@@ -218,7 +226,79 @@ def curva_de_poder(deltas=(0.0, -0.2, -0.35, -0.5, -0.7), sementes=(42, 7, 2026)
             .reset_index())
 
 
-def executar(graficos: bool = True, poder: bool = False) -> dict:
+# --------------------------------------------------------- viés de sobrevivente
+IDADE_COORTE_ANTIGA = 15.0   # anos: só quem já é velho o bastante poderia ter saído
+
+
+def perfil_do_cadastro() -> pd.DataFrame:
+    """Idade das usinas em operação e fases que o SIGA registra.
+
+    O ponto é factual: o cadastro **não tem** estado de "descomissionada" para
+    UFV/EOL — a usina simplesmente deixa de aparecer. Então não há como contar
+    as que faltam; só dá para limitar quantas poderiam ser.
+    """
+    from ML.analise_sobrevivencia.dados_simulados import ENTRADA, FONTE
+
+    bruto = pd.read_parquet(ENTRADA, columns=["SigTipoGeracao", "DscFaseUsina",
+                                              "DatEntradaOperacao", "DatGeracaoConjuntoDados"])
+    fases = (bruto[bruto["SigTipoGeracao"].isin(FONTE)]
+             .groupby(["SigTipoGeracao", "DscFaseUsina"]).size()
+             .rename("usinas").reset_index())
+    log.info("[sobrevivente] fases registradas para UFV/EOL: %s",
+             sorted(fases["DscFaseUsina"].unique()))
+    return fases
+
+
+def vies_de_sobrevivente(df: pd.DataFrame, fracoes=(0.05, 0.10, 0.20, 0.50)) -> pd.DataFrame:
+    """Quanto as estimativas andariam se o cadastro tivesse perdido usinas.
+
+    Como as descomissionadas não são observáveis, a conta é de **limite
+    superior**: supõe-se que a coorte antiga (mais de 15 anos) perdeu uma
+    fração `f` de usinas e que **todas elas eram as piores** — falharam cedo,
+    no primeiro quartil dos tempos observados da coorte. Qualquer cenário real
+    é menos severo que esse.
+    """
+    from lifelines import CoxPHFitter, KaplanMeierFitter
+
+    # A coorte exposta ao risco de ter sumido é definida pela IDADE da usina
+    # (quanto tempo ela existe), não pelo tempo até o evento: uma usina nova que
+    # falhou cedo nunca teria tido tempo de ser descomissionada.
+    idade = (df["data_corte"] - df["data_entrada_operacao"]).dt.days / 365.25
+    antigas = df[idade >= IDADE_COORTE_ANTIGA]
+    if antigas.empty:
+        raise ValueError(
+            f"nenhuma usina com {IDADE_COORTE_ANTIGA:.0f}+ anos; ajuste IDADE_COORTE_ANTIGA")
+    tempo_pessimista = float(antigas[TEMPO].quantile(0.25))
+
+    linhas = []
+    for fracao in (0.0, *fracoes):
+        faltantes = int(round(fracao * len(antigas)))
+        extras = antigas.sample(n=faltantes, replace=True, random_state=42).copy() if faltantes else antigas.head(0)
+        if faltantes:
+            extras[TEMPO] = tempo_pessimista
+            extras[EVENTO] = 1
+        completo = pd.concat([df, extras], ignore_index=True)
+
+        registro = {"fracao_perdida": fracao, "usinas_adicionadas": faltantes,
+                    "n_total": len(completo)}
+        for fonte, grupo in completo.groupby(ESTRATO):
+            km = KaplanMeierFitter().fit(grupo[TEMPO], grupo[EVENTO])
+            registro[f"mediana_{fonte}"] = float(km.median_survival_time_)
+            registro[f"s5_{fonte}"] = float(km.predict(5))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cox = CoxPHFitter().fit(completo[[TEMPO, EVENTO, ESTRATO, *COVARIAVEIS]].dropna(),
+                                    duration_col=TEMPO, event_col=EVENTO, strata=[ESTRATO])
+        registro["beta_potencia"] = float(cox.params_["log_potencia_mw_c"])
+        linhas.append(registro)
+
+    tabela = pd.DataFrame(linhas)
+    log.info("[sobrevivente] coorte antiga: %d usinas (>= %.0f anos); tempo pessimista = %.1f anos",
+             len(antigas), IDADE_COORTE_ANTIGA, tempo_pessimista)
+    return tabela
+
+
+def executar(graficos: bool = True, poder: bool = False, sobrevivente: bool = False) -> dict:
     variante, meta = carregar_variante()
     efeito = meta.get("efeito_tempo_dependente", {})
     covariavel = efeito.get("covariavel", "log_potencia_mw_c")
@@ -246,12 +326,21 @@ def executar(graficos: bool = True, poder: bool = False) -> dict:
         print("\n=== Poder do teste: quanto a violação precisa crescer para aparecer ===")
         print(curva.round(4).to_string(index=False))
 
+    vies = None
+    if sobrevivente:
+        fases = perfil_do_cadastro()
+        vies = vies_de_sobrevivente(principal)
+        print("\n=== Fases que o SIGA registra para UFV/EOL ===")
+        print(fases.to_string(index=False))
+        print("\n=== Viés de sobrevivente: limite superior do efeito ===")
+        print(vies.round(3).to_string(index=False))
+
     caminho = grafico_residuos(variante, covariavel, float(efeito.get("corte_anos", 3))) if graficos else None
     if caminho:
         log.info("[diagnosticos] gráfico: %s", caminho)
 
     return {"testes": testes, "ingenuo": ingenuo, "periodos": periodos,
-            "poder": curva, "grafico": caminho}
+            "poder": curva, "sobrevivente": vies, "grafico": caminho}
 
 
 def main() -> None:
@@ -262,9 +351,11 @@ def main() -> None:
     parser.add_argument("--sem-graficos", action="store_true")
     parser.add_argument("--poder", action="store_true",
                         help="regera a variante com violações de vários tamanhos (mais lento)")
+    parser.add_argument("--sobrevivente", action="store_true",
+                        help="mede o limite superior do viés de sobrevivente do cadastro")
     args = parser.parse_args()
 
-    executar(not args.sem_graficos, args.poder)
+    executar(not args.sem_graficos, args.poder, args.sobrevivente)
 
 
 if __name__ == "__main__":
