@@ -23,10 +23,17 @@ SIGA e nunca entram na conta. Se as descomissionadas forem justamente as que
 mais quebravam, o modelo subestima o risco. O que o módulo faz é medir o
 tamanho possível desse efeito, em vez de afirmar que ele é pequeno.
 
+E um terceiro, o **estudo de Monte Carlo** (`--monte-carlo`): o conjunto
+principal é uma realização só, e um coeficiente que caiu dentro do IC pode ter
+caído por sorte. Repetindo a geração com K sementes dá para separar viés de
+ruído e medir a **cobertura real** dos intervalos — que é o que diz se os ICs
+publicados significam o que prometem.
+
 Uso:
     python -m ML.analise_sobrevivencia.diagnosticos
     python -m ML.analise_sobrevivencia.diagnosticos --sem-graficos
     python -m ML.analise_sobrevivencia.diagnosticos --sobrevivente
+    python -m ML.analise_sobrevivencia.diagnosticos --monte-carlo 30
 """
 
 from __future__ import annotations
@@ -226,6 +233,118 @@ def curva_de_poder(deltas=(0.0, -0.2, -0.35, -0.5, -0.7), sementes=(42, 7, 2026)
             .reset_index())
 
 
+# ---------------------------------------------------------- riscos competitivos
+def incidencia_por_causa(fonte: str = "eolica", horizontes=(2.0, 5.0, 10.0),
+                         caminho: Path | None = None) -> pd.DataFrame:
+    """Incidência acumulada por causa: Aalen-Johansen contra o ingênuo `1 − KM`.
+
+    Tratar as outras causas como censura e usar `1 − KM` é o erro clássico de
+    riscos competitivos. A censura supõe que a usina **continuaria sob risco**
+    daquela causa depois de sair — mas uma usina que trocou a caixa
+    multiplicadora não está "censurada" para falha de inversor: ela teve outro
+    desfecho. O resultado é superestimar a incidência da causa de interesse, e
+    a soma das incidências de todas as causas pode passar de 100%.
+
+    Usa a variante de riscos competitivos
+    (`eventos_manutencao_competitivos.parquet`), onde cada causa tem seu próprio
+    relógio e a composição das falhas muda com a idade.
+    """
+    from lifelines import AalenJohansenFitter, KaplanMeierFitter
+    from ML.analise_sobrevivencia.dados_simulados import SAIDA_COMPETITIVOS
+
+    arquivo = caminho or SAIDA_COMPETITIVOS
+    if not arquivo.exists():
+        raise FileNotFoundError(
+            f"{arquivo} não existe. Rode: python -m ML.analise_sobrevivencia.dados_simulados")
+
+    df = pd.read_parquet(arquivo)
+    df = df[df[ESTRATO] == fonte]
+    causas = sorted(df.loc[df[EVENTO] == 1, "tipo_evento"].dropna().unique())
+    codigo = {causa: i + 1 for i, causa in enumerate(causas)}
+    indicador = df["tipo_evento"].map(codigo).fillna(0).astype(int)
+
+    linhas = []
+    for causa, numero in codigo.items():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            aj = AalenJohansenFitter(calculate_variance=False)
+            aj.fit(df[TEMPO], indicador, event_of_interest=numero)
+            km = KaplanMeierFitter().fit(df[TEMPO], (indicador == numero).astype(int))
+        for t in horizontes:
+            correta = float(np.interp(t, aj.cumulative_density_.index,
+                                      aj.cumulative_density_.iloc[:, 0]))
+            ingenua = 1 - float(km.predict(t))
+            linhas.append({"fonte": fonte, "causa": causa, "anos": t,
+                           "incidencia_aalen_johansen": correta,
+                           "incidencia_1_menos_km": ingenua,
+                           "superestimacao": ingenua - correta})
+    tabela = pd.DataFrame(linhas)
+    totais = tabela.groupby("anos")[["incidencia_aalen_johansen", "incidencia_1_menos_km"]].sum()
+    log.info("[competitivos] soma das incidências por horizonte (AJ x 1-KM):\n%s",
+             totais.round(3).to_string())
+    return tabela
+
+
+# ----------------------------------------------------------------- Monte Carlo
+def ajustar_cox_em(bruto: pd.DataFrame):
+    """Cox estratificado por fonte sobre uma geração qualquer do simulador."""
+    from ML.analise_sobrevivencia.dados import _covariaveis
+
+    df = _covariaveis(bruto, "potencia_mw", "id_subsistema",
+                      bruto["data_entrada_operacao"].dt.year)
+    return _cox(df, COVARIAVEIS)
+
+
+def monte_carlo(repeticoes: int = 30, semente_inicial: int = 1000, **parametros) -> pd.DataFrame:
+    """Gera `repeticoes` conjuntos independentes e mede viés e cobertura dos ICs.
+
+    Uma realização só não distingue "o modelo é bom" de "deu sorte". Com K
+    realizações dá para responder duas perguntas separadas:
+
+    - **Viés:** a média dos `beta` estimados fica no valor verdadeiro?
+    - **Cobertura:** em quantos por cento das execuções o IC de 95% contém o
+      valor verdadeiro? Se o procedimento estiver correto, ~95%. Bem abaixo
+      disso significa IC estreito demais, e o número publicado promete mais
+      precisão do que tem.
+    """
+    from ML.analise_sobrevivencia import dados_simulados as gerador
+
+    usinas, data_corte = gerador.carregar_usinas(1.0)
+    verdadeiros = gerador.BETA
+
+    linhas = []
+    for i in range(repeticoes):
+        semente = semente_inicial + i
+        bruto = gerador.simular(usinas, data_corte, semente, **parametros)
+        resumo = ajustar_cox_em(bruto).summary
+        for covariavel in COVARIAVEIS:
+            linha = resumo.loc[covariavel]
+            linhas.append({
+                "repeticao": i, "covariavel": covariavel,
+                "verdadeiro": verdadeiros[covariavel], "estimado": float(linha["coef"]),
+                "ic_inferior": float(linha["coef lower 95%"]),
+                "ic_superior": float(linha["coef upper 95%"]),
+                "erro_padrao": float(linha["se(coef)"]),
+                "eventos": int(bruto["evento"].sum()),
+            })
+        if (i + 1) % 10 == 0:
+            log.info("[monte-carlo] %d/%d conjuntos", i + 1, repeticoes)
+
+    bruto_mc = pd.DataFrame(linhas)
+    bruto_mc["erro"] = bruto_mc["estimado"] - bruto_mc["verdadeiro"]
+    bruto_mc["cobriu"] = ((bruto_mc["ic_inferior"] <= bruto_mc["verdadeiro"])
+                          & (bruto_mc["verdadeiro"] <= bruto_mc["ic_superior"]))
+    bruto_mc["largura_ic"] = bruto_mc["ic_superior"] - bruto_mc["ic_inferior"]
+
+    return (bruto_mc.groupby("covariavel")
+            .agg(verdadeiro=("verdadeiro", "first"), media_estimada=("estimado", "mean"),
+                 vies=("erro", "mean"), desvio=("estimado", "std"),
+                 reqm=("erro", lambda e: float(np.sqrt((e ** 2).mean()))),
+                 largura_ic=("largura_ic", "mean"), cobertura=("cobriu", "mean"),
+                 repeticoes=("cobriu", "size"))
+            .reset_index())
+
+
 # --------------------------------------------------------- viés de sobrevivente
 IDADE_COORTE_ANTIGA = 15.0   # anos: só quem já é velho o bastante poderia ter saído
 
@@ -298,7 +417,8 @@ def vies_de_sobrevivente(df: pd.DataFrame, fracoes=(0.05, 0.10, 0.20, 0.50)) -> 
     return tabela
 
 
-def executar(graficos: bool = True, poder: bool = False, sobrevivente: bool = False) -> dict:
+def executar(graficos: bool = True, poder: bool = False, sobrevivente: bool = False,
+             repeticoes_mc: int = 0, competitivos: bool = False) -> dict:
     variante, meta = carregar_variante()
     efeito = meta.get("efeito_tempo_dependente", {})
     covariavel = efeito.get("covariavel", "log_potencia_mw_c")
@@ -326,6 +446,19 @@ def executar(graficos: bool = True, poder: bool = False, sobrevivente: bool = Fa
         print("\n=== Poder do teste: quanto a violação precisa crescer para aparecer ===")
         print(curva.round(4).to_string(index=False))
 
+    incidencia = None
+    if competitivos:
+        incidencia = pd.concat([incidencia_por_causa("eolica"), incidencia_por_causa("solar")],
+                               ignore_index=True)
+        print("\n=== Riscos competitivos: incidência correta x ingênua ===")
+        print(incidencia.round(3).to_string(index=False))
+
+    mc = None
+    if repeticoes_mc:
+        mc = monte_carlo(repeticoes_mc)
+        print(f"\n=== Monte Carlo: {repeticoes_mc} conjuntos independentes ===")
+        print(mc.round(4).to_string(index=False))
+
     vies = None
     if sobrevivente:
         fases = perfil_do_cadastro()
@@ -340,7 +473,8 @@ def executar(graficos: bool = True, poder: bool = False, sobrevivente: bool = Fa
         log.info("[diagnosticos] gráfico: %s", caminho)
 
     return {"testes": testes, "ingenuo": ingenuo, "periodos": periodos,
-            "poder": curva, "sobrevivente": vies, "grafico": caminho}
+            "poder": curva, "sobrevivente": vies, "monte_carlo": mc,
+            "competitivos": incidencia, "grafico": caminho}
 
 
 def main() -> None:
@@ -353,9 +487,14 @@ def main() -> None:
                         help="regera a variante com violações de vários tamanhos (mais lento)")
     parser.add_argument("--sobrevivente", action="store_true",
                         help="mede o limite superior do viés de sobrevivente do cadastro")
+    parser.add_argument("--monte-carlo", type=int, default=0, metavar="K",
+                        help="gera K conjuntos e mede viés e cobertura dos ICs (ex.: 30)")
+    parser.add_argument("--competitivos", action="store_true",
+                        help="compara a incidência por causa com o ingênuo 1 - KM")
     args = parser.parse_args()
 
-    executar(not args.sem_graficos, args.poder, args.sobrevivente)
+    executar(not args.sem_graficos, args.poder, args.sobrevivente, args.monte_carlo,
+             args.competitivos)
 
 
 if __name__ == "__main__":

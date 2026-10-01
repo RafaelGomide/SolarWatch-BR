@@ -1,0 +1,65 @@
+{
+  "gerado_em": "2026-10-01T10:18:24",
+  "descricao": "Variante SINTÉTICA com riscos competitivos: um tempo latente por causa, observa-se o menor.",
+  "fonte_usinas": "dados/bruto/dados_aneel_bruto.parquet",
+  "seed": 42,
+  "seed_efetiva": 47,
+  "modelo": "Weibull por causa, com formas diferentes; covariáveis comuns a todas",
+  "causas": {
+    "eolica": {
+      "sistema_eletrico": {
+        "k": 1.0,
+        "lambda_anos": 22.0
+      },
+      "caixa_multiplicadora": {
+        "k": 2.2,
+        "lambda_anos": 13.0
+      },
+      "pas": {
+        "k": 1.8,
+        "lambda_anos": 17.0
+      },
+      "gerador": {
+        "k": 1.4,
+        "lambda_anos": 22.0
+      }
+    },
+    "solar": {
+      "inversor": {
+        "k": 1.1,
+        "lambda_anos": 14.0
+      },
+      "rastreador": {
+        "k": 1.7,
+        "lambda_anos": 20.0
+      },
+      "modulos": {
+        "k": 2.5,
+        "lambda_anos": 22.0
+      },
+      "transformador": {
+        "k": 1.0,
+        "lambda_anos": 80.0
+      }
+    }
+  },
+  "beta_verdadeiro": {
+    "log_potencia_mw_c": 0.2,
+    "subsistema_NE": 0.25,
+    "subsistema_S": 0.1,
+    "subsistema_N": 0.15,
+    "ano_entrada_c": -0.04
+  },
+  "n_usinas": 1854,
+  "n_eventos": 679,
+  "causas_observadas": {
+    "sistema_eletrico": 194,
+    "caixa_multiplicadora": 129,
+    "gerador": 111,
+    "pas": 110,
+    "inversor": 79,
+    "transformador": 26,
+    "rastreador": 21,
+    "modulos": 9
+  }
+}

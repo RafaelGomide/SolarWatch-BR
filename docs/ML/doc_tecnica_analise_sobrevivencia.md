@@ -54,11 +54,13 @@ ML/analise_sobrevivencia/
 ├── dados.py             # carga do treino (simulado) e das usinas da predição (dim_usina)
 ├── modelos.py           # KM, paramétricos, Cox, Weibull de regressão e o Previsor
 ├── recorrentes.py       # Andersen-Gill, PWP (tempo total e gap time), MCF
-├── diagnosticos.py      # poder do teste de PH e limite do viés de sobrevivente
+├── diagnosticos.py      # poder do teste de PH, viés de sobrevivente, Monte Carlo, riscos competitivos
 ├── avaliacao.py         # C-index k-fold, Schoenfeld, recuperação dos betas, calibração
 ├── treinar.py           # 1º evento: orquestra tudo, salva pickles e tabelas
 ├── treinar_recorrentes.py  # eventos recorrentes: AG, PWP, MCF e manutenções esperadas
-└── resultados/          # kaplan_meier_por_fonte.png, calibracao.png, probabilidades_12m.png, mcf_recorrentes.png
+├── tests/               # 29 testes do gerador: invariantes, determinismo, recuperação dos betas
+└── resultados/          # kaplan_meier_por_fonte.png, calibracao.png, probabilidades_12m.png,
+                         # mcf_recorrentes.png, schoenfeld_ph_violado.png
 ```
 
 ---
@@ -74,6 +76,8 @@ python -m ML.analise_sobrevivencia.treinar --sem-graficos --sem-salvar
 python -m ML.analise_sobrevivencia.treinar_recorrentes   # eventos recorrentes (§14)
 python -m ML.analise_sobrevivencia.diagnosticos --poder  # diagnóstico de PH (§8.5)
 python -m ML.analise_sobrevivencia.diagnosticos --sobrevivente  # viés de sobrevivente
+python -m ML.analise_sobrevivencia.diagnosticos --monte-carlo 30  # viés e cobertura dos ICs
+python -m ML.analise_sobrevivencia.diagnosticos --competitivos    # incidência por causa
 ```
 
 | Argumento | Padrão | Efeito |

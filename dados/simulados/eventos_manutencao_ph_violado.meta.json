@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-09-30T18:56:11",
+  "gerado_em": "2026-10-01T10:18:24",
   "descricao": "Variante SINTÉTICA com efeito de covariável dependente do tempo, para testar diagnósticos de riscos proporcionais.",
   "fonte_usinas": "dados/bruto/dados_aneel_bruto.parquet",
   "seed": 42,

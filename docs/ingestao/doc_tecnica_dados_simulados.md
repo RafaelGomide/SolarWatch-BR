@@ -525,6 +525,89 @@ Os resultados do diagnóstico estão na [doc da análise §8.5](../ML/doc_tecnic
 
 ---
 
+## 9.3 Variante com riscos competitivos — `eventos_manutencao_competitivos.parquet`
+
+No conjunto principal, o `tipo_evento` é sorteado **depois** que o tempo já foi decidido ([§8](#8-tipo-do-evento)). A causa é um rótulo, não um mecanismo: nenhum modelo consegue aprender nada com ela, porque ela não tem relação com quando a falha aconteceu.
+
+Nesta variante cada causa tem o próprio relógio, e vence a que chegar primeiro:
+
+$$T = \min_c T_c, \qquad T_c \sim \text{Weibull}(k_c, \lambda_c)\cdot e^{-\eta/k_c}, \qquad \text{causa} = \arg\min_c T_c$$
+
+**A forma é o que distingue os mecanismos.** `k ≈ 1` é falha aleatória, sem desgaste (eletrônica, transformador); `k > 1,8` é desgaste que se acumula (caixa multiplicadora, degradação de módulo). As covariáveis agem igual em todas as causas, então o efeito de potência e região é o mesmo — o que muda é a linha de base de cada causa.
+
+| Fonte | Causa | k | λ (anos) |
+|---|---|---|---|
+| Eólica | sistema elétrico | 1,0 | 22 |
+| Eólica | caixa multiplicadora | 2,2 | 13 |
+| Eólica | pás | 1,8 | 17 |
+| Eólica | gerador | 1,4 | 22 |
+| Solar | inversor | 1,1 | 14 |
+| Solar | rastreador | 1,7 | 20 |
+| Solar | módulos | 2,5 | 22 |
+| Solar | transformador | 1,0 | 80 |
+
+**A composição das falhas muda com a idade** — que é o fenômeno que esta variante existe para reproduzir:
+
+| Eólica | < 2 anos | > 6 anos |
+|---|---|---|
+| Sistema elétrico | 46% | 22% |
+| Caixa multiplicadora | 15% | 36% |
+
+| Solar | < 2 anos | > 6 anos |
+|---|---|---|
+| Inversor | 65% | 40% |
+| Rastreador | 7% | 40% |
+
+Os tempos latentes das causas que **não** venceram não vão para o arquivo: eles não são observáveis no mundo real, e deixá-los ali seria entregar ao modelo uma informação que ele nunca teria.
+
+Uma observação que a variante torna visível: a composição **observada** das causas não é a mesma do mix nominal da [§8](#8-tipo-do-evento). Com um parque jovem, as causas de desgaste lento quase não aparecem — módulos somam 7% dos eventos observados contra 15% do mix de vida inteira. Não é descalibração: é o efeito de olhar uma janela curta de um processo que ainda vai acontecer.
+
+### Por que isso importa: `1 − KM` superestima
+
+Tratar as outras causas como censura e usar `1 − KM` é o erro clássico de riscos competitivos. A censura supõe que a usina **continuaria sob risco** daquela causa depois de sair — mas uma usina que trocou a caixa multiplicadora não está "censurada" para falha de inversor: ela teve outro desfecho.
+
+`python -m ML.analise_sobrevivencia.diagnosticos --competitivos` compara o estimador correto (Aalen-Johansen) com o ingênuo:
+
+| Eólica, 10 anos | Aalen-Johansen | 1 − KM | Erro |
+|---|---|---|---|
+| Caixa multiplicadora | 0,188 | 0,316 | **+68%** |
+| Pás | 0,158 | 0,266 | +68% |
+| Sistema elétrico | 0,240 | 0,314 | +31% |
+| Gerador | 0,146 | 0,224 | +53% |
+| **Soma** | **0,73** | **1,12** | — |
+
+A soma denuncia o problema: pelo estimador ingênuo, **112% das usinas** teriam falhado por alguma causa em 10 anos.
+
+---
+
+## 9.4 Variante com covariáveis do ONS e da NASA — `eventos_manutencao_clima.parquet`
+
+Todas as covariáveis anteriores vêm do cadastro da ANEEL. Esta variante (`--com-clima`) acrescenta três que vêm do resto do pipeline do projeto, para que o modelo de sobrevivência tenha sinal vindo das outras fontes:
+
+| Covariável | Origem | β verdadeiro | História |
+|---|---|---|---|
+| `vento_50m_c` | NASA POWER, ponto mais próximo | +0,08 por m/s acima de 7 | mais vento, mais ciclos de carga |
+| `temperatura_c` | NASA POWER, ponto mais próximo | +0,05 por °C acima de 25 | calor degrada eletrônica de potência |
+| `fator_capacidade_c` | geração medida do ONS | +1,20 por unidade acima de 0,35 | mais horas sob esforço |
+
+**Clima:** média do ponto NASA mais próximo da coordenada da usina — a mesma aproximação da `fato_clima` do ETL, e pela mesma razão: a NASA entrega por coordenada consultada, não por usina. Cobre 100% das usinas.
+
+**Fator de capacidade:** calculado da geração do ONS (`energia / (potência × horas)`) e trazido para a ANEEL pela ponte ONS×ANEEL. Cobre **569 das 1.854 usinas (31%)** — o limite é o vínculo, não o dado. Nas demais, é imputado pela média de fonte e subsistema, e a coluna `fator_capacidade_imputado` marca quais. Vale lembrar que o ONS mede por *unidade*, muitas vezes um conjunto, então o FC do conjunto é atribuído a todas as suas usinas: um conjunto não tem fator de capacidade "por usina" observável.
+
+**Verificação — o sinal é recuperável.** Um Cox com as oito covariáveis:
+
+| Covariável | Verdadeiro | Estimado | IC 95% |
+|---|---|---|---|
+| `vento_50m_c` | 0,08 | **0,080** | 0,004 – 0,156 |
+| `temperatura_c` | 0,05 | **0,044** | 0,003 – 0,084 |
+| `fator_capacidade_c` | 1,20 | **1,041** | −0,007 – 2,090 |
+
+As três são recuperadas. O fator de capacidade tem IC largo e p de 0,052: 31% de cobertura real e a imputação do resto cobram seu preço em precisão — o que é a resposta honesta de "quanto sinal a ponte ONS×ANEEL ainda consegue carregar".
+
+Esta variante **não** substitui o conjunto principal. Promovê-la a padrão só faz sentido quando o vínculo cobrir a maior parte do parque; até lá, o principal continua dependendo só do cadastro, que é completo.
+
+---
+
 ## 10. Metadados e reprodutibilidade
 
 Junto ao parquet é gravado `eventos_manutencao_simulados.meta.json`:
@@ -650,6 +733,30 @@ Automatizáveis em testes (ver [§15](#15-próximos-passos)):
 
 ---
 
+### 12.5 Estudo de Monte Carlo
+
+A [§12.1](#121-cox-estratificado-por-fonte-recupera-beta) mostra **uma** realização. Um coeficiente dentro do IC ali pode ter caído dentro por sorte, e um fora pode ser azar. Repetindo a geração com 30 sementes independentes dá para separar as duas coisas:
+
+```bash
+python -m ML.analise_sobrevivencia.diagnosticos --monte-carlo 30
+```
+
+| Covariável | Verdadeiro | Média estimada | Viés | REQM | Largura do IC | Cobertura |
+|---|---|---|---|---|---|---|
+| `ano_entrada_c` | −0,04 | −0,035 | +0,005 | 0,011 | 0,04 | 96,7% |
+| `log_potencia_mw_c` | 0,20 | 0,181 | **−0,020** | 0,048 | 0,21 | 96,7% |
+| `subsistema_NE` | 0,25 | 0,267 | +0,017 | 0,181 | 0,60 | 90,0% |
+| `subsistema_S` | 0,10 | 0,169 | +0,069 | 0,212 | 0,77 | 93,3% |
+| `subsistema_N` | 0,15 | 0,183 | +0,033 | 0,366 | **1,28** | 86,7% |
+
+Três leituras:
+
+1. **A imprecisão regional, em números.** O IC de `subsistema_N` é **6 vezes mais largo** que o de potência (1,28 contra 0,21) e o desvio entre realizações é de 0,37 — maior que o próprio efeito verdadeiro (0,15). É a [§12.3](#123-por-que-os-efeitos-regionais-são-imprecisos) deixando de ser uma explicação e virando uma medida: com 24 usinas no Norte, o coeficiente regional é quase ruído.
+2. **A cobertura cai onde a amostra é pequena.** As duas covariáveis contínuas ficam em 96,7%, perto do nominal de 95%. As regionais ficam entre 86,7% e 93,3% — os ICs assintóticos prometem mais do que entregam quando o estrato tem poucas usinas.
+3. **O viés de `log_potencia_mw_c` é sistemático, não ruído.** −0,020 em 30 realizações, sempre no mesmo sentido: é a atenuação causada pela fragilidade não modelada ([§5.1](#51-fragilidade-frailty-gama-por-usina)), e não um erro de estimação.
+
+---
+
 ## 13. Como usar na análise de sobrevivência
 
 ### 13.1 Kaplan-Meier por fonte (via `ds_toolkit`)
@@ -725,11 +832,22 @@ cph.predict_median(novas)                                   # tempo mediano até
 
 ## 15. Próximos passos
 
-1. **Testes automatizados** (`pytest`): invariantes da [§9](#9-esquema-do-arquivo-de-saída), determinismo por semente e recuperação de $\beta$ dentro do IC em uma amostra grande (por exemplo, replicar a população 10×).
-2. **Estudo de Monte Carlo:** gerar K conjuntos com sementes diferentes e medir viés e cobertura dos ICs do Cox. Isso mostra, com números, a imprecisão regional da [§12.3](#123-por-que-os-efeitos-regionais-são-imprecisos).
-3. **Variantes do gerador** controladas por flags: *frailty*, eventos recorrentes, riscos competitivos por `tipo_evento` e censura aleatória.
-4. **Carga no DuckDB:** tabela `fato_evento_manutencao` com a coluna `simulado = TRUE`, e o endpoint `/usinas/{id}/sobrevivencia` devolvendo esse aviso no payload.
-5. **Cruzamento com ONS/NASA:** usar clima (vento a 50 m, temperatura) e fator de capacidade real como covariáveis na próxima versão do gerador, para que o modelo de sobrevivência tenha sinal vindo das outras fontes do projeto.
+Todos os itens desta lista foram feitos. O que cada um virou:
+
+| # | Item | Onde está |
+|---|---|---|
+| 1 | **Testes automatizados** | `ML/analise_sobrevivencia/tests/` — 29 testes: invariantes da [§9](#9-esquema-do-arquivo-de-saída), determinismo por semente, flags, e recuperação de $\beta$ com a população replicada 10× |
+| 2 | **Estudo de Monte Carlo** | [§12.5](#125-estudo-de-monte-carlo) — 30 conjuntos, com viés, REQM e cobertura por covariável |
+| 3 | **Variantes por flag** | *frailty* ([§5.1](#51-fragilidade-frailty-gama-por-usina)), recorrentes ([§9.1](#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)), censura aleatória ([§7.4](#74-censura-aleatória-independente)), riscos competitivos ([§9.3](#93-variante-com-riscos-competitivos--eventos_manutencao_competitivosparquet)) e PH violado ([§9.2](#92-variante-com-efeito-tempo-dependente--eventos_manutencao_ph_violadoparquet)) |
+| 4 | **Carga no DuckDB** | tabela `fato_manutencao` com `simulado BOOLEAN NOT NULL`, e `/usinas/{id}/sobrevivencia` devolvendo `simulado: true` + `aviso` no payload ([backend §6.6](../backend/doc_tecnica_backend.md#66-get-usinasidsobrevivencia)) |
+| 5 | **Cruzamento com ONS/NASA** | [§9.4](#94-variante-com-covariáveis-do-ons-e-da-nasa--eventos_manutencao_climaparquet) — vento, temperatura e fator de capacidade real como covariáveis, com os $\beta$ recuperados |
+
+O que ficou em aberto, agora em outro nível:
+
+1. **Promover a variante com clima a padrão**, quando o vínculo ONS×ANEEL cobrir mais que os 31% atuais.
+2. **Modelar a fragilidade dentro do Cox de produção**, não só estimá-la à parte — hoje os coeficientes publicados são os marginais, atenuados.
+3. **Riscos competitivos no produto:** a API serve "probabilidade de alguma manutenção"; com a variante competitiva, daria para servir "probabilidade de falha de inversor", que é o que a operação compra peça para resolver.
+4. **Substituir o gerador por dado real de O&M**, que continua sendo o único jeito de as conclusões valerem fora do exercício.
 
 ---
 

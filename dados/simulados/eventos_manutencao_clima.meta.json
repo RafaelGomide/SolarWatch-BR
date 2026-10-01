@@ -1,0 +1,38 @@
+{
+  "gerado_em": "2026-10-01T10:18:35",
+  "descricao": "Variante SINTÉTICA com covariáveis reais do ONS (fator de capacidade) e da NASA (vento, temperatura).",
+  "fonte_usinas": "dados/bruto/dados_aneel_bruto.parquet",
+  "seed": 42,
+  "seed_efetiva": 48,
+  "beta_verdadeiro": {
+    "log_potencia_mw_c": 0.2,
+    "subsistema_NE": 0.25,
+    "subsistema_S": 0.1,
+    "subsistema_N": 0.15,
+    "ano_entrada_c": -0.04,
+    "vento_50m_c": 0.08,
+    "temperatura_c": 0.05,
+    "fator_capacidade_c": 1.2
+  },
+  "referencias_centralizacao": {
+    "potencia_mw": 30.0,
+    "ano_entrada": 2018,
+    "vento_50m_ms": 7.0,
+    "temperatura_2m_c": 25.0,
+    "fator_capacidade": 0.35
+  },
+  "weibull_por_fonte": {
+    "eolica": {
+      "k": 1.6,
+      "lambda_anos": 5.5
+    },
+    "solar": {
+      "k": 1.3,
+      "lambda_anos": 7.0
+    }
+  },
+  "n_usinas": 1854,
+  "n_eventos": 833,
+  "fator_capacidade_medido": 569,
+  "fator_capacidade_imputado": 1285
+}

@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-09-30T18:56:11",
+  "gerado_em": "2026-10-01T10:18:24",
   "descricao": "Dados SINTÉTICOS de 1º evento de manutenção corretiva/falha por usina.",
   "fonte_usinas": "dados/bruto/dados_aneel_bruto.parquet",
   "seed": 42,
