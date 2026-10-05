@@ -187,6 +187,25 @@ Distribuição da qualidade do vínculo com a ANEEL, que determina quando `poten
 
 > Quem consome deve filtrar por `potencia_mw IS NOT NULL` (ou por `qualidade_vinculo`) em qualquer cálculo que dependa de potência, como fator de capacidade.
 
+As 146 linhas `sem_vinculo` são duas populações diferentes, e `tipo_unidade` é o que as separa:
+
+| `tipo_unidade` | Unidades | Por quê |
+|---|---|---|
+| `conjunto` | 83 | o nome do conjunto não casou com nenhuma usina da ANEEL (nome de subestação, grafia divergente). A potência **existe** no cadastro |
+| `pequenas_usinas` | 63 | agregado estadual de MMGD: o ONS soma a geração distribuída de um estado numa linha. **Não há usina para vincular** |
+
+A segunda não é um vínculo pendente, é o grão da publicação ([ETL §8.2.1](../ETL/doc_tecnica_etl.md#821-a-decisão-de-grão)). Vale para qualquer consulta por unidade:
+
+```sql
+-- só as unidades que podem ter cadastro
+SELECT * FROM dim_usina WHERE tipo_unidade <> 'pequenas_usinas';
+
+-- os agregados respondem por 32% da energia medida: não são descartáveis
+SELECT d.tipo_unidade, round(sum(g.energia_mwh) / 1000, 1) AS gwh
+FROM dim_usina d JOIN fato_geracao g USING (usina_id)
+GROUP BY 1 ORDER BY gwh DESC;
+```
+
 ### 6.2 `fato_geracao` — 575.904 linhas
 
 ```sql
@@ -489,7 +508,8 @@ O último item merece atenção: o dimensionamento do system design (§3.3) part
 | 4 | Sem testes automatizados do banco | Uma mudança no esquema pode quebrar a carga em silêncio | `pytest`: criar o banco em arquivo temporário, conferir contagens, PKs, FKs e o resultado das views |
 | 5 | Sem histórico: cada carga substitui tudo | Não dá para comparar versões do dado | Se necessário, gravar `data_carga` nas tabelas ou guardar bancos datados |
 | 6 | Metadados de proveniência não ficam no banco | O banco não sabe de qual coleta ele veio | Tabela `meta_carga` com data da carga, partição raw de origem e contagens |
-| 7 | 146 unidades sem potência e 10 sem clima | Endpoints devolvem campos nulos para elas | Melhorar o vínculo no ETL ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas-e-próximos-passos)) |
+| 7 | 83 unidades sem potência por vínculo pendente e 10 sem clima | Endpoints devolvem campos nulos para elas | Melhorar o vínculo no ETL ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas-e-próximos-passos)) |
+| 8 | Outras 63 unidades (`tipo_unidade = 'pequenas_usinas'`) nunca terão cadastro | São somatórios estaduais de MMGD, não usinas | Nada a corrigir: filtrar por `tipo_unidade` ([§6.1](#61-dim_usina--308-linhas)) |
 
 ---
 

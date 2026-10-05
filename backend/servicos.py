@@ -42,7 +42,14 @@ def _checar_janela(inicio: date | None, fim: date | None) -> None:
 
 
 def listar_usinas(cur: duckdb.DuckDBPyConnection, fonte: str | None, regiao: str | None,
-                  limite: int, cursor: str | None) -> dict:
+                  limite: int, cursor: str | None, tipo_unidade: str | None = None) -> dict:
+    """Lista a `dim_usina` paginada por cursor.
+
+    `tipo_unidade` existe para separar os grãos que o ONS mistura na mesma
+    tabela: 'usina' e 'conjunto' têm cadastro na ANEEL; 'pequenas_usinas' são
+    somatórios estaduais de MMGD, sem potência, coordenada nem data de operação
+    por natureza. Quem precisa de cadastro filtra por tipo.
+    """
     ultimo_id = decodificar(cursor)
     filtros = ["usina_id > ?"]
     parametros: list = [ultimo_id]
@@ -52,6 +59,9 @@ def listar_usinas(cur: duckdb.DuckDBPyConnection, fonte: str | None, regiao: str
     if regiao:
         filtros.append("regiao = ?")
         parametros.append(regiao)
+    if tipo_unidade:
+        filtros.append("tipo_unidade = ?")
+        parametros.append(tipo_unidade)
     onde = " AND ".join(filtros)
 
     linhas = cur.execute(

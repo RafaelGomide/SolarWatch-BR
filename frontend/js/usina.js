@@ -1,6 +1,6 @@
 /* Página de detalhe de uma usina: cadastro, geração, clima, previsão e sobrevivência. */
 
-import { buscar, escapar, etiquetaFonte, fmt, mostrarErro } from "./api.js";
+import { buscar, escapar, etiquetaFonte, etiquetaTipo, fmt, mostrarErro } from "./api.js";
 import { corDoTema, linha } from "./graficos.js";
 import { iniciarTema } from "./tema.js";
 
@@ -9,16 +9,24 @@ const idUsina = new URLSearchParams(location.search).get("id");
 const estado = { geracao: null, clima: null };
 
 /* ------------------------------- cadastro ------------------------------- */
+/* Um agregado estadual não tem "cadastro parcial": não tem cadastro, e não é
+   um problema a resolver. A etiqueta de qualidade do vínculo só faz sentido
+   para quem poderia estar vinculado. */
+function etiquetaCadastro(usina) {
+  if (usina.tipo_unidade === "pequenas_usinas") return "";
+  return usina.qualidade_vinculo === "exata" || usina.qualidade_vinculo === "consistente"
+    ? '<span class="etiqueta etiqueta--ok">cadastro confiável</span>'
+    : `<span class="etiqueta etiqueta--risco" title="Vínculo ONS×ANEEL ${escapar(usina.qualidade_vinculo)}">cadastro parcial</span>`;
+}
+
 function renderizarCabecalho(usina) {
   document.title = `${usina.nome} · SolarWatch BR`;
   el("nome-usina").textContent = usina.nome;
   el("etiquetas").innerHTML = `
     ${etiquetaFonte(usina.fonte)}
-    <span class="etiqueta etiqueta--neutra">${escapar(usina.tipo_unidade)}</span>
+    ${etiquetaTipo(usina.tipo_unidade)}
     <span class="etiqueta etiqueta--neutra">${escapar(usina.regiao)}${usina.id_estado ? ` · ${escapar(usina.id_estado)}` : ""}</span>
-    ${usina.qualidade_vinculo === "exata" || usina.qualidade_vinculo === "consistente"
-      ? '<span class="etiqueta etiqueta--ok">cadastro confiável</span>'
-      : `<span class="etiqueta etiqueta--risco" title="Vínculo ONS×ANEEL ${escapar(usina.qualidade_vinculo)}">cadastro parcial</span>`}`;
+    ${etiquetaCadastro(usina)}`;
 
   el("cadastro").innerHTML = `
     <div><dt>Potência instalada</dt><dd>${fmt.potencia(usina.potencia_mw)}</dd></div>
@@ -28,8 +36,11 @@ function renderizarCabecalho(usina) {
     <div><dt>Pico horário observado</dt><dd>${fmt.decimal(usina.pico_geracao_mw)} MWh</dd></div>
     <div><dt>Coordenadas</dt><dd>${usina.lat == null ? "—" : `${usina.lat.toFixed(3)}, ${usina.lon.toFixed(3)}`}</dd></div>`;
 
+  // Sem potência por dois motivos diferentes: o agregado estadual não tem
+  // cadastro por natureza, o resto tem vínculo incompleto. O aviso é outro.
   if (usina.potencia_mw == null) {
-    el("aviso-cadastro").classList.remove("escondido");
+    const agregado = usina.tipo_unidade === "pequenas_usinas";
+    el(agregado ? "aviso-agregado" : "aviso-cadastro").classList.remove("escondido");
   }
 }
 

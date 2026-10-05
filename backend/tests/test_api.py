@@ -39,6 +39,16 @@ def uma_usina(cliente):
     return completas[0]
 
 
+@pytest.fixture(scope="module")
+def um_agregado(cliente):
+    """Um agregado estadual de pequenas usinas (MMGD), que não tem cadastro."""
+    pagina = cliente.get(f"{PREFIXO}/usinas",
+                         params={"tipo_unidade": "pequenas_usinas", "limit": 5}).json()
+    if not pagina["data"]:
+        pytest.skip("nenhum agregado 'pequenas_usinas' no banco")
+    return pagina["data"][0]
+
+
 # ------------------------------------------------------------------ sistema
 def test_health_responde_ok_ou_degradado(cliente):
     corpo = cliente.get("/health").json()
@@ -91,6 +101,69 @@ def test_filtro_por_fonte_e_regiao(cliente):
     assert all(u["fonte"] == "solar" and u["regiao"] == "NE" for u in corpo["data"])
 
 
+def test_filtro_por_tipo_de_unidade(cliente):
+    """A lista mistura três grãos de medição do ONS; o filtro separa."""
+    totais = {}
+    for tipo in ("usina", "conjunto", "pequenas_usinas"):
+        corpo = cliente.get(f"{PREFIXO}/usinas",
+                            params={"tipo_unidade": tipo, "limit": 50}).json()
+        assert all(u["tipo_unidade"] == tipo for u in corpo["data"])
+        totais[tipo] = corpo["total_estimado"]
+
+    completo = cliente.get(f"{PREFIXO}/usinas", params={"limit": 1}).json()
+    assert sum(totais.values()) == completo["total_estimado"]
+
+
+def test_agregado_estadual_nao_tem_cadastro(cliente):
+    """Nenhum agregado tem potência, coordenada ou data: é a natureza do grão.
+
+    O ONS publica a soma da geração distribuída de um estado numa linha só, e
+    não existe usina correspondente na ANEEL para vincular.
+    """
+    corpo = cliente.get(f"{PREFIXO}/usinas",
+                        params={"tipo_unidade": "pequenas_usinas", "limit": 100}).json()
+    assert corpo["data"], "esperava agregados no banco"
+    assert all(u["potencia_mw"] is None and u["lat"] is None and u["data_operacao"] is None
+               for u in corpo["data"])
+    assert all(u["qualidade_vinculo"] == "sem_vinculo" for u in corpo["data"])
+
+
+def test_filtro_de_tipo_combina_com_os_outros(cliente):
+    corpo = cliente.get(f"{PREFIXO}/usinas",
+                        params={"tipo_unidade": "conjunto", "fonte": "eolica",
+                                "regiao": "NE", "limit": 50}).json()
+    assert corpo["data"], "esperava conjuntos eólicos no NE"
+    assert all(u["tipo_unidade"] == "conjunto" and u["fonte"] == "eolica"
+               and u["regiao"] == "NE" for u in corpo["data"])
+
+
+def test_agregado_mantem_a_geracao_medida(cliente, um_agregado):
+    """O que falta é o cadastro, não o dado: a geração do agregado é real."""
+    resposta = cliente.get(f"{PREFIXO}/usinas/{um_agregado['usina_id']}/geracao")
+
+    assert resposta.status_code == 200
+    assert resposta.json()["total_mwh"] > 0
+
+
+@pytest.mark.parametrize("recurso", ["sobrevivencia", "recorrencia"])
+def test_agregado_explica_por_que_nao_ha_estimativa(cliente, um_agregado, recurso):
+    """404 com o diagnóstico certo: não é vínculo incompleto, é grão agregado.
+
+    Os dois casos caem no mesmo 404 e têm encaminhamentos opostos — um conjunto
+    com vínculo incompleto pode ganhar cadastro quando o vínculo melhorar; um
+    agregado estadual não vai ganhar nunca.
+    """
+    resposta = cliente.get(f"{PREFIXO}/usinas/{um_agregado['usina_id']}/{recurso}")
+    if resposta.status_code == 503:
+        pytest.skip(f"modelo de {recurso} indisponível")
+
+    assert resposta.status_code == 404
+    detalhe = resposta.json()["detail"]
+    assert "agregado estadual" in detalhe
+    assert "vínculo" not in detalhe          # o diagnóstico errado para este caso
+    assert "tipo_unidade=" in detalhe        # diz como listar só quem tem cadastro
+
+
 def test_usina_inexistente_devolve_problem_details(cliente):
     resposta = cliente.get(f"{PREFIXO}/usinas/999999")
     assert resposta.status_code == 404
@@ -102,6 +175,7 @@ def test_usina_inexistente_devolve_problem_details(cliente):
 
 @pytest.mark.parametrize("parametros", [
     {"limit": 0}, {"limit": 500}, {"fonte": "nuclear"}, {"cursor": "não-é-base64"},
+    {"tipo_unidade": "agregado"}, {"tipo_unidade": "pequenas usinas"},
 ])
 def test_parametros_invalidos_devolvem_422(cliente, parametros):
     resposta = cliente.get(f"{PREFIXO}/usinas", params=parametros)

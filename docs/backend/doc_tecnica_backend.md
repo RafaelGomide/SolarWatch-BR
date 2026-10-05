@@ -143,7 +143,7 @@ Todos sob `/api/v1`, exceto `/health` e `/metrics` (que respondem também sem pr
 
 ### 6.1 `GET /usinas`
 
-Lista paginada. Filtros: `fonte` (`solar`|`eolica`), `regiao` (`N`|`NE`|`SE`|`S`). Paginação: `limit` (1–200) e `cursor`.
+Lista paginada. Filtros: `fonte` (`solar`|`eolica`), `regiao` (`N`|`NE`|`SE`|`S`), `tipo_unidade` (`usina`|`conjunto`|`pequenas_usinas`). Paginação: `limit` (1–200) e `cursor`.
 
 ```json
 {
@@ -157,7 +157,14 @@ Lista paginada. Filtros: `fonte` (`solar`|`eolica`), `regiao` (`N`|`NE`|`SE`|`S`
 }
 ```
 
-> Campos nulos são reais, não erro: 212 das 308 unidades não têm potência confiável porque o vínculo ONS × ANEEL é parcial. O campo `qualidade_vinculo` permite ao cliente filtrar ([ETL §8.2.4](../ETL/doc_tecnica_etl.md#824-verificação-do-vínculo-contra-a-geração-medida)).
+> Campos nulos são reais, não erro: 212 das 308 unidades não têm potência confiável. O campo `qualidade_vinculo` permite ao cliente filtrar ([ETL §8.2.4](../ETL/doc_tecnica_etl.md#824-verificação-do-vínculo-contra-a-geração-medida)).
+
+**`tipo_unidade` separa dois nulos de naturezas opostas** ([ETL §8.2.1](../ETL/doc_tecnica_etl.md#821-a-decisão-de-grão)):
+
+- **149 unidades** `conjunto` com vínculo incompleto ou inconsistente: a potência **existe** na ANEEL e não pôde ser atribuída com confiança. Melhorar o vínculo resolve.
+- **63 unidades** `pequenas_usinas`: agregados estaduais de MMGD. O ONS publica a soma da geração distribuída de um estado numa linha só; não há usina na ANEEL para vincular, e nunca haverá.
+
+O exemplo acima é justamente um agregado. `GET /usinas?tipo_unidade=conjunto` (ou `usina`) devolve só as unidades com cadastro, e os três filtros se combinam. Por isso os endpoints de estimativa distinguem os dois casos no 404 — ver [§6.6](#66-get-usinasidsobrevivencia).
 
 ### 6.2 `GET /usinas/{id}` · `GET /usinas/{id}/geracao` · `GET /usinas/{id}/clima`
 
@@ -214,6 +221,15 @@ Três campos existem para não enganar quem consome:
 - `metodo_extrapolacao`: `cox` dentro do suporte observado, `weibull` além dele ([sobrevivência §10](../ML/doc_tecnica_analise_sobrevivencia.md#10-o-bug-da-extrapolação-e-como-foi-resolvido)).
 
 O endpoint usa a tabela pré-calculada quando a usina está nela (rápido) e roda o modelo quando há horizontes customizados via `?horizontes=3&horizontes=9`.
+
+Sem potência ou data de operação não há como estimar, e o 404 diz **qual** dos dois motivos é — porque os encaminhamentos são opostos:
+
+| Caso | Mensagem | O que o cliente faz |
+|---|---|---|
+| `conjunto` com vínculo incompleto | "não tem potência ou data de operação confiáveis (vínculo ONS×ANEEL incompleto)" | nada hoje; pode ganhar cadastro quando o vínculo melhorar |
+| `pequenas_usinas` | "é um agregado estadual de pequenas usinas (MMGD / Tipo III)... não existe cadastro na ANEEL" + sugere `tipo_unidade=` | filtra esse grão da lista; não há o que esperar |
+
+O frontend mostra a mensagem da API no lugar do card, então a distinção chega à tela sem código duplicado ([frontend §6.2](../frontend/doc_tecnica_frontend.md)). `/recorrencia` segue a mesma regra.
 
 ### 6.7 `GET /usinas/{id}/recorrencia`
 

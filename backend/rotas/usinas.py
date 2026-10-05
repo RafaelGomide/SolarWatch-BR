@@ -22,13 +22,24 @@ ID_USINA = Path(description="Identificador da usina na dim_usina", examples=[12]
 def listar(
     fonte: str | None = Query(None, pattern="^(solar|eolica)$"),
     regiao: str | None = Query(None, pattern="^(N|NE|SE|S)$", description="Subsistema do SIN"),
+    tipo_unidade: str | None = Query(
+        None, pattern="^(usina|conjunto|pequenas_usinas)$",
+        description="Grão da unidade. 'pequenas_usinas' são agregados estaduais de MMGD, "
+                    "sem cadastro na ANEEL: filtre por 'usina' ou 'conjunto' para obter só "
+                    "as unidades com potência, coordenada e data de operação"),
     limit: int = Query(None, ge=1, le=configuracao().limite_maximo_pagina),
     cursor: str | None = Query(None, description="Cursor devolvido em next_cursor"),
     cur: duckdb.DuckDBPyConnection = Depends(conexao),
 ):
-    """Paginação por cursor (§5.5), ordenada por `usina_id`."""
+    """Paginação por cursor (§5.5), ordenada por `usina_id`.
+
+    A lista mistura três grãos de medição do ONS; `tipo_unidade` separa os que
+    têm cadastro ('usina', 'conjunto') dos agregados estaduais
+    ('pequenas_usinas'), que não têm por natureza.
+    """
     return servicos.listar_usinas(cur, fonte, regiao,
-                                  limit or configuracao().limite_padrao_pagina, cursor)
+                                  limit or configuracao().limite_padrao_pagina, cursor,
+                                  tipo_unidade)
 
 
 @roteador.get("/{usina_id}", response_model=UsinaDetalhe, summary="Detalhe de uma usina")

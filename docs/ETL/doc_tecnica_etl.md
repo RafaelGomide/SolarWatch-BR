@@ -424,6 +424,16 @@ O system design pede uma `dim_usina` com potência, localização, município e 
 
 **Escolha:** o grão da `dim_usina` é a **unidade geradora do ONS** (usina individual, conjunto ou agregado), porque é o único nível em que existe geração medida. Os atributos de cadastro vêm da ANEEL por um **vínculo explícito e auditável**. A alternativa, dividir a geração de um conjunto entre suas usinas (por exemplo, proporcionalmente à potência), fabricaria dado e foi descartada.
 
+**Consequência:** a dimensão passa a conter três grãos diferentes, e `tipo_unidade` é o que os separa. A distinção não é cosmética — ela decide o que existe para cada linha:
+
+| `tipo_unidade` | Unidades | Com potência | Com coordenada | Com manutenção | Energia medida |
+|---|---|---|---|---|---|
+| `conjunto` | 227 | 78 | 144 | 144 | 35.272 GWh |
+| `pequenas_usinas` | 63 | **0** | **0** | **0** | 16.640 GWh |
+| `usina` | 18 | 18 | 18 | 15 | 361 GWh |
+
+As 63 linhas `pequenas_usinas` são as modalidades "Pequenas Usinas (MMGD)" e "(Tipo III)": o ONS publica numa linha só a **soma** da geração distribuída de um estado. Não existe usina correspondente na ANEEL para vincular, e isso não é falha do vínculo — é o grão em que a medição é publicada. Elas carregam **32% da energia medida** no período, então descartá-las na ingestão perderia um terço do dado; o que se faz é marcá-las e deixar quem precisa de cadastro filtrar por `tipo_unidade` ([backend §6.1](../backend/doc_tecnica_backend.md#61-get-usinas)).
+
 #### 8.2.2 Unidades (`_unidades_ons`)
 
 Para cada `chave_unidade` solar/eólica do ONS clean, os atributos mais recentes: `id_ons`, `ceg_ons`, `nome`, `fonte`, `tipo_unidade`, `modalidade_ons`, `id_estado`, `regiao` (= subsistema), além de primeira e última medição e **`pico_geracao_mw`** (maior geração horária observada).
@@ -749,7 +759,7 @@ GROUP BY ALL;
 | 2 | Clima de 10 pontos para 298 unidades (mediana de 100 km, máximo de 834 km) | Clima aproximado, fraco no Norte (sem ponto) | Gerar `locais.csv` a partir dos centroides da `dim_usina` (um ponto por unidade com coordenada) |
 | 3 | Irradiância horária da NASA com ~3 meses de atraso | `nasa_clima_horario` sem irradiância no período recente | Para modelos horários, usar janelas com mais de 3 meses ou outra fonte (por exemplo, INMET) |
 | 4 | Dia da NASA diária em hora solar local (≈ Brasília, com até ~1 h de diferença) | Desalinhamento mínimo na borda do dia | Aceitável. Documentado |
-| 5 | Agregados "Pequenas Usinas" (63) sem cadastro | Sem potência, localização nem manutenção | Por natureza (são somatórios estaduais). Podem ser filtrados por `tipo_unidade` |
+| 5 | Agregados "Pequenas Usinas" (63) sem cadastro | Sem potência, localização nem manutenção — mas **32% da energia medida** | **Aceito por natureza:** são somatórios estaduais de MMGD, não usinas, e nenhum vínculo os resolveria ([§8.2.1](#821-a-decisão-de-grão)). Separáveis por `tipo_unidade`: filtro na API (`GET /usinas?tipo_unidade=`), no painel ("Tipo de unidade") e aviso próprio na página da unidade; os endpoints de estimativa respondem 404 dizendo que o grão é agregado, não que o vínculo falhou |
 | 6 | `fato_manutencao` herda o 1º evento de N usinas | Conjuntos grandes parecem "falhar antes" | Usar o arquivo simulado por usina para modelagem. Documentado |
 | 7 | Limpeza do ONS ~40 s (transformações com `groupby` + `lambda`) | Aceitável hoje; cresce com o histórico | Particionar o clean do ONS por mês e processar só as partições novas |
 | 8 | ~~Sem testes automatizados~~ **Resolvido:** 91 testes em `ETL/tests`, sem ler `dados/` ([§11](#11-testes-automatizados)) — `interpolar_gaps_curtos` (3 h interpola, 4 h não, e não pela metade), `completar_grade`, `base_ceg`, `_nucleo`, `_ids_estaveis` e as quatro regras da `validacao` | Resta: o `_vincular` e a pipeline ponta a ponta não têm teste ([§11.2](#112-o-que-não-é-testado)) | Um teste de integração com um cadastro de brinquedo, cobrindo `raw → clean → curated` |

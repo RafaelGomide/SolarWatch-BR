@@ -35,6 +35,30 @@ PREMISSA_CLIMA = (
 )
 POTENCIA_REFERENCIA_MW = 30.0
 ANO_REFERENCIA = 2018
+TIPO_AGREGADO = "pequenas_usinas"
+
+
+def _sem_cadastro(usina: dict, estimativa: str) -> HTTPException:
+    """404 para unidades sem potência ou data de operação.
+
+    Os dois motivos levam ao mesmo lugar e têm diagnósticos opostos: um
+    agregado estadual **nunca** vai ter cadastro (o ONS publica a soma da MMGD
+    de um estado, não uma usina), enquanto um conjunto com vínculo incompleto
+    pode ganhar cadastro quando o vínculo melhorar. Dizer "vínculo incompleto"
+    para um agregado manda o cliente procurar um problema que não existe.
+    """
+    if usina["tipo_unidade"] == TIPO_AGREGADO:
+        detalhe = (
+            f"A unidade {usina['usina_id']} é um agregado estadual de pequenas usinas "
+            "(MMGD / Tipo III): o ONS publica a soma da geração do estado, não uma usina, "
+            f"então não existe cadastro na ANEEL e não há {estimativa} para ela. "
+            "Use tipo_unidade=usina ou tipo_unidade=conjunto em /usinas para listar só as "
+            "unidades com cadastro.")
+    else:
+        detalhe = (
+            f"A usina {usina['usina_id']} não tem potência ou data de operação confiáveis "
+            f"(vínculo ONS×ANEEL incompleto), então não é possível estimar {estimativa}.")
+    return HTTPException(status.HTTP_404_NOT_FOUND, detalhe)
 
 
 def _indisponivel(recurso: str) -> HTTPException:
@@ -135,10 +159,7 @@ def recorrencia(cur: duckdb.DuckDBPyConnection, usina_id: int,
     if registro.recorrencia is None:
         raise _indisponivel("recorrencia")
     if usina["potencia_mw"] is None or usina["data_operacao"] is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"A usina {usina_id} não tem potência ou data de operação confiáveis "
-            "(vínculo ONS×ANEEL incompleto), então não é possível estimar as manutenções.")
+        raise _sem_cadastro(usina, "manutenções esperadas")
 
     previsor = registro.recorrencia
     entrada = _covariaveis(usina)
@@ -206,10 +227,7 @@ def sobrevivencia(cur: duckdb.DuckDBPyConnection, usina_id: int,
     if registro.sobrevivencia is None:
         raise _indisponivel("sobrevivencia")
     if usina["potencia_mw"] is None or usina["data_operacao"] is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"A usina {usina_id} não tem potência ou data de operação confiáveis "
-            "(vínculo ONS×ANEEL incompleto), então não é possível estimar a sobrevivência.")
+        raise _sem_cadastro(usina, "estimativa de sobrevivência")
 
     previsor = registro.sobrevivencia
     entrada = _covariaveis(usina)

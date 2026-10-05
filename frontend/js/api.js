@@ -60,7 +60,27 @@ export const fmt = {
   dataHora: (iso) =>
     iso ? new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—",
   fonte: (f) => (f === "solar" ? "Solar" : f === "eolica" ? "Eólica" : f ?? "—"),
+  tipoUnidade: (t) => TIPOS_UNIDADE[t]?.rotulo ?? t ?? "—",
 };
+
+/* Os três grãos que o ONS mistura na mesma lista. O agregado estadual não é
+   uma usina: é a soma da geração distribuída de um estado, e por isso não tem
+   cadastro na ANEEL — nem vai ter. */
+export const TIPOS_UNIDADE = {
+  usina: { rotulo: "usina", ajuda: "Usina individual medida pelo ONS" },
+  conjunto: { rotulo: "conjunto", ajuda: "Conjunto de usinas: o ONS mede a soma do complexo" },
+  pequenas_usinas: {
+    rotulo: "agregado estadual",
+    ajuda: "Soma da geração distribuída (MMGD / Tipo III) de um estado. Não é uma usina, "
+         + "então não tem cadastro na ANEEL: sem potência, coordenadas nem data de operação.",
+  },
+};
+
+/** Etiqueta do grão da unidade, com a explicação no title. */
+export function etiquetaTipo(tipo) {
+  const { rotulo, ajuda } = TIPOS_UNIDADE[tipo] ?? { rotulo: tipo, ajuda: "" };
+  return `<span class="etiqueta etiqueta--neutra" title="${escapar(ajuda)}">${escapar(rotulo)}</span>`;
+}
 
 /** Etiqueta colorida por fonte de energia. */
 export function etiquetaFonte(fonte) {

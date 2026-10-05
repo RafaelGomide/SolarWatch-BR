@@ -1,11 +1,14 @@
 /* Página inicial: KPIs nacionais, gráfico de geração e lista de usinas. */
 
-import { buscar, escapar, etiquetaFonte, fmt, mostrarErro } from "./api.js";
+import { TIPOS_UNIDADE, buscar, escapar, etiquetaFonte, fmt, mostrarErro } from "./api.js";
 import { barras, corDoTema, linha } from "./graficos.js";
 import { iniciarTema } from "./tema.js";
 
 const el = (id) => document.getElementById(id);
-const estado = { usinas: [], cursor: null, filtros: { fonte: "", regiao: "" }, nacional: null };
+const estado = {
+  usinas: [], cursor: null, nacional: null,
+  filtros: { fonte: "", regiao: "", tipo_unidade: "" },
+};
 
 /* --------------------------------- KPIs --------------------------------- */
 async function carregarResumo() {
@@ -90,13 +93,24 @@ async function carregarPrevisao() {
 }
 
 /* --------------------------------- lista --------------------------------- */
+/* Potência nula tem dois motivos opostos, e a etiqueta precisa dizer qual:
+   o agregado estadual nunca vai ter cadastro; o conjunto com vínculo
+   incompleto ganha um quando o vínculo melhorar. */
+function semPotencia(usina) {
+  const agregado = usina.tipo_unidade === "pequenas_usinas";
+  return `<span class="etiqueta etiqueta--neutra" title="${escapar(agregado
+    ? TIPOS_UNIDADE.pequenas_usinas.ajuda
+    : "Vínculo ONS×ANEEL incompleto: a potência existe, mas não pôde ser atribuída com confiança")}"
+    >${agregado ? "agregado" : "sem cadastro"}</span>`;
+}
+
 function linhaDaTabela(usina) {
   return `<tr>
     <td><a href="usina.html?id=${usina.usina_id}">${escapar(usina.nome)}</a></td>
     <td>${etiquetaFonte(usina.fonte)}</td>
     <td>${escapar(usina.regiao)}${usina.id_estado ? ` · ${escapar(usina.id_estado)}` : ""}</td>
     <td class="numero">${usina.potencia_mw == null
-      ? '<span class="etiqueta etiqueta--neutra" title="Vínculo ONS×ANEEL incompleto">sem cadastro</span>'
+      ? semPotencia(usina)
       : fmt.potencia(usina.potencia_mw)}</td>
     <td>${fmt.data(usina.data_operacao)}</td>
   </tr>`;
@@ -134,6 +148,10 @@ async function iniciar() {
   });
   el("filtro-regiao").addEventListener("change", (e) => {
     estado.filtros.regiao = e.target.value;
+    carregarUsinas();
+  });
+  el("filtro-tipo").addEventListener("change", (e) => {
+    estado.filtros.tipo_unidade = e.target.value;
     carregarUsinas();
   });
   el("carregar-mais").addEventListener("click", () => carregarUsinas({ acrescentar: true }));

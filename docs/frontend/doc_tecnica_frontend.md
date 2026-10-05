@@ -157,7 +157,7 @@ O `tema.js` lê a preferência salva no `localStorage` (dentro de `try/catch`, p
 | KPIs | Geração solar (24 TWh) e eólica (28,3 TWh) no período, unidades monitoradas (308), período coberto | `/geracao/nacional`, `/health` |
 | Geração diária do SIN | Gráfico de linhas com área, duas séries | `/geracao/nacional?granularidade=dia` |
 | Previsão de 24 h | Gráfico de barras agrupadas, com a origem e o RMSE do modelo no subtítulo | `/geracao/previsao` (solar e eólica) |
-| Usinas monitoradas | Tabela com filtros de fonte e subsistema, botão "carregar mais" | `/usinas` |
+| Usinas monitoradas | Tabela com filtros de fonte, tipo de unidade e subsistema, botão "carregar mais" | `/usinas` |
 
 A paginação usa o **cursor** da API: o botão "carregar mais" envia `next_cursor` e concatena os resultados; ele some quando a API para de devolver cursor.
 
@@ -256,6 +256,7 @@ Cada bloco tem os três estados, sem página em branco:
 
 - **Carregando:** `.carregando` — um retângulo com brilho deslizante, dimensionado para o conteúdo que virá (evita o pulo de layout).
 - **Vazio:** mensagem explicativa no lugar do gráfico/tabela ("Sem dados no período", "Nenhuma usina com esses filtros").
+- **Ausente por natureza:** o agregado estadual de pequenas usinas (MMGD) não tem potência, coordenada nem data de operação, e isso não é um defeito a sinalizar como tal. Na tabela ele aparece como `agregado` (e não "sem cadastro"), na página da unidade recebe um aviso informativo em vez do aviso de cadastro parcial, e a etiqueta de qualidade do vínculo é omitida — não faz sentido para quem não poderia estar vinculado. O mapa `TIPOS_UNIDADE` (`api.js`) guarda o rótulo e a explicação de cada grão num lugar só.
 - **Erro:** `.erro` com `role="alert"`, mostrando título e detalhe do Problem Details.
 
 Falhas são **isoladas por bloco**: se `/previsao` responder 503, o card da previsão mostra a mensagem e o restante da página continua carregando normalmente — o mesmo princípio de degradação graciosa do backend (§10.5 do system design), agora na interface.

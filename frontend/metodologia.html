@@ -82,8 +82,16 @@
           <div><dt>Vínculo exato (CEG)</dt><dd style="color:var(--cor-ok)">18 unidades</dd></div>
           <div><dt>Vínculo consistente</dt><dd style="color:var(--cor-ok)">78 unidades</dd></div>
           <div><dt>Inconsistente</dt><dd style="color:var(--cor-aviso)">66 unidades</dd></div>
-          <div><dt>Sem vínculo</dt><dd style="color:var(--texto-fraco)">146 unidades</dd></div>
+          <div><dt>Sem vínculo</dt><dd style="color:var(--texto-fraco)">83 unidades</dd></div>
+          <div><dt>Agregado estadual</dt><dd style="color:var(--texto-fraco)">63 unidades</dd></div>
         </dl>
+        <p><strong>As 63 últimas são um caso diferente.</strong> São linhas “Pequenas Usinas (MMGD / Tipo III)”:
+          o ONS publica a <em>soma</em> da geração distribuída de um estado numa linha só. Não existe usina
+          correspondente na ANEEL para vincular — e não é uma falha a corrigir, é o grão em que a medição é
+          publicada. A geração delas é real (cerca de um terço da energia medida aqui); o que não existe é
+          potência, coordenada, data de operação e, por consequência, previsão por usina e estimativa de
+          manutenção. No painel elas aparecem como <em>agregado</em> e podem ser separadas pelo filtro
+          <strong>Tipo de unidade</strong>; na API, pelo parâmetro <code>tipo_unidade</code>.</p>
       </section>
 
       <section class="secao">
