@@ -21,11 +21,12 @@
 8. [Curated layer (`curated/`)](#8-curated-layer-curated)
 9. [Validação (`validacao.py`)](#9-validação-validacaopy)
 10. [Uso do `ds_toolkit`](#10-uso-do-ds_toolkit)
-11. [Resultados da última execução](#11-resultados-da-última-execução)
-12. [Diferenças em relação ao DDL do system design](#12-diferenças-em-relação-ao-ddl-do-system-design)
-13. [Decisões de design e trade-offs](#13-decisões-de-design-e-trade-offs)
-14. [Como consumir a camada curated](#14-como-consumir-a-camada-curated)
-15. [Limitações conhecidas e próximos passos](#15-limitações-conhecidas-e-próximos-passos)
+11. [Testes automatizados](#11-testes-automatizados)
+12. [Resultados da última execução](#12-resultados-da-última-execução)
+13. [Diferenças em relação ao DDL do system design](#13-diferenças-em-relação-ao-ddl-do-system-design)
+14. [Decisões de design e trade-offs](#14-decisões-de-design-e-trade-offs)
+15. [Como consumir a camada curated](#15-como-consumir-a-camada-curated)
+16. [Limitações conhecidas e próximos passos](#16-limitações-conhecidas-e-próximos-passos)
 
 ---
 
@@ -83,10 +84,15 @@ ETL/
 │   ├── __init__.py
 │   ├── dim_usina.py   # dimensão + vínculo ONS × ANEEL + ponte
 │   └── fatos.py       # fato_geracao, fato_clima, fato_manutencao
-└── validacao.py       # PK, FK, obrigatórias e faixas antes de gravar
+├── validacao.py       # PK, FK, obrigatórias e faixas antes de gravar
+└── tests/             # 91 testes das regras de limpeza, vínculo e validação (§11)
+    ├── conftest.py
+    ├── test_utils.py
+    ├── test_dim_usina.py
+    └── test_validacao.py
 ```
 
-Cada módulo de clean expõe uma função `limpar(caminho) -> DataFrame`, e cada módulo de curated expõe funções puras que recebem DataFrames e devolvem DataFrames. **Nenhum módulo grava arquivo por conta própria**: quem grava é o `pipeline.py`. Isso deixa as funções testáveis isoladamente.
+Cada módulo de clean expõe uma função `limpar(caminho) -> DataFrame`, e cada módulo de curated expõe funções puras que recebem DataFrames e devolvem DataFrames. **Nenhum módulo grava arquivo por conta própria**: quem grava é o `pipeline.py`. Isso é o que deixa as funções testáveis isoladamente — e a suíte de `tests/` ([§11](#11-testes-automatizados)) só existe nessa forma por causa disso.
 
 ---
 
@@ -101,6 +107,8 @@ python -m ETL.pipeline --ingerir --simular       # ... e regenera os eventos sim
 python -m ETL.pipeline --etapas clean curated    # pula a etapa raw
 python -m ETL.pipeline --etapas curated          # só remonta o modelo estrela a partir do clean (~20 s)
 python -m ETL.pipeline --data-coleta 2026-09-18  # reprocessa uma coleta específica
+
+pytest ETL/tests -q                              # 91 testes das regras, sem ler dados/ (~1 s)
 ```
 
 | Argumento | Efeito |
@@ -575,11 +583,57 @@ Os relatórios são impressos quando `VERBOSE_TOOLKIT = True` (`config.py`).
 
 ---
 
-## 11. Resultados da última execução
+## 11. Testes automatizados
+
+```bash
+pytest ETL/tests -q      # 91 testes, ~1 s
+pytest -q                # suíte do projeto (ingestão, ETL, simulação, backend): 238
+```
+
+**Nenhum teste lê `dados/`.** Cada caso constrói em memória a menor tabela que exibe a regra — uma série de cinco horas com um buraco de três, uma `dim_usina` de duas linhas — ou escreve Parquets de brinquedo em `tmp_path`. Isso é o que permite testar o que o dado real não oferece sob demanda: um buraco de exatamente 4 horas, uma coordenada no meridiano de Greenwich, uma unidade que desapareceu do ONS entre duas execuções.
+
+O `conftest.py` desliga os relatórios do `ds_toolkit` (`VERBOSE_TOOLKIT = False`). A função continua sendo chamada — o caminho de código é o da pipeline —, só não despeja uma tabela por tabela validada na saída do pytest.
+
+| Arquivo | Cobre | Testes |
+|---|---|---|
+| `test_utils.py` | `interpolar_gaps_curtos`, `completar_grade`, `base_ceg`, `listar_faltantes`, `flag_qualidade`, `ler_parquet` | 35 |
+| `test_dim_usina.py` | `_nucleo` e `_ids_estaveis` | 19 |
+| `test_validacao.py` | PK, obrigatórias, faixas, integridade referencial e o relatório de erros | 37 |
+
+### 11.1 O que cada grupo protege
+
+**`interpolar_gaps_curtos`** ([§6.3](#63-interpolar_gaps_curtosdf-chave-colunas-max_gap)) — a regra do projeto é "3 horas interpola, 4 não", e os testes a verificam nos dois sentidos: buracos de 1, 2 e 3 horas saem preenchidos; de 4, 5, 12 e 48 saem **inteiros nulos**. O caso central é `test_buraco_longo_nao_e_preenchido_pela_metade`, que mede também o comportamento que estamos evitando — `interpolate(limit=3)` deixa 21 dos 24 nulos, preenchendo as 3 primeiras horas — para o teste não ser uma tautologia sobre a própria implementação.
+
+Os extremos das séries sintéticas estão sobre a reta `y = 10x`, então o valor interpolado de cada hora é conhecido exatamente e o teste compara números, não só a ausência de nulos. Os outros casos cobrem as fronteiras que a implementação precisa respeitar: não extrapolar as pontas (a latência da NASA nunca é inventada), não fechar o buraco do fim de uma usina com o começo da próxima, medir cada buraco na sua própria série (um passa, o outro não na mesma chamada) e marcar `interpolado` e `faltante` na mesma linha quando uma medida foi preenchida e outra não.
+
+**`completar_grade`** ([§6.2](#62-completar_gradedf-chave-tempo-colunas_fixas-freqh)) — que o caminho rápido devolve o **mesmo objeto** (`df is entrada`) quando a grade já está completa, que cada série é completada entre o seu próprio primeiro e último instante (uma usina que entrou em operação depois não recebe horas anteriores à primeira medição dela) e que os atributos fixos são herdados nas linhas criadas. O teste `test_linha_ausente_e_valor_nulo_recebem_o_mesmo_tratamento` é o que justifica a função existir: com uma hora *ausente* e outra *nula*, as duas saem da grade como nulos e recebem o mesmo valor da reta.
+
+**`base_ceg`** ([§6.7](#67-outros)) — o ponto é um só: o CEG do ONS (`...-2.01`) e o da ANEEL (`...-2.1`) têm que colapsar na mesma base, porque é essa igualdade que sustenta o vínculo por CEG. Os testes registram também o que a função pressupõe: sem sufixo de versão, o último trecho removido é o número da usina.
+
+**`_nucleo`** ([§8.2.3](#823-vínculo-ons--aneel-_vincular)) — os casos reais do cadastro: `conjunto eolico morro do chapeu sul ii 230 kv` → `morro do chapeu sul ii`, com o nível de tensão removido colado (`230kv`) ou separado, e `caetite 2` mantendo o `2`, que é parte do nome e não tensão. Mais a idempotência e o caso-limite: um conjunto nomeado só com palavras genéricas devolve núcleo vazio, abaixo de `TAMANHO_MINIMO_NUCLEO` — o que faz o `_vincular` não vincular, em vez de casar com qualquer usina da UF.
+
+**`_ids_estaveis`** ([§8.2.5](#825-ids-estáveis)) — a promessa de que `usina_id` não muda entre execuções, testada contra uma `dim_usina.parquet` anterior escrita em `tmp_path`. Os IDs seguem a **chave**, não a posição (a dim é reordenada por fonte/região/nome antes de receber o ID); unidades novas recebem `max + 1`; e o ID de uma unidade que saiu do ONS **não é reciclado** — reciclá-lo faria uma usina nova herdar o histórico da antiga em qualquer coisa que tenha guardado o número: gráfico salvo, modelo treinado, link compartilhado.
+
+**`validacao`** ([§9](#9-validação-validacaopy)) — um conjunto curated mínimo e válido (duas usinas, dois fatos de cada) é sabotado uma regra por vez. Cada violação é verificada pela mensagem, não só pela exceção: PK duplicada na dimensão e na PK **composta** do fato horário (repetir o `usina_id` em horas diferentes é o normal e tem que passar), nulo em cada obrigatória, cada faixa estourada por cima e por baixo, e fato órfão em cada uma das três fatos.
+
+Dois grupos registram o que **não** é erro, que é a parte fácil de quebrar sem perceber: `energia_mwh` nula com flag `faltante` é dado ausente declarado (o resultado normal de um gap longo demais), `potencia_mw` nula é o vínculo inconsistente se recusando a publicar número, as bordas das faixas são fechadas (lat `-34,0` e `5,5` passam) e uma usina sem fato de clima não é violação — a integridade referencial vale só na direção fato → dimensão.
+
+Por fim, dois testes sobre o **relatório**: que todos os problemas saem numa lista só (não é preciso rodar a pipeline quatro vezes para descobrir quatro erros) e que a contagem aparece na mensagem — saber que são 3 linhas e não 3.000 muda o diagnóstico. Um deles documenta a cascata: sobrescrever um `usina_id` na dimensão produz a PK duplicada **e** os fatos daquela usina virando órfãos, e ver os quatro sintomas juntos aponta para a causa única.
+
+### 11.2 O que não é testado
+
+- **O vínculo ONS × ANEEL ponta a ponta.** `_nucleo` é testado isoladamente; `_vincular` (a ordem por especificidade, a remoção de palavras do fim, a exclusividade das usinas já usadas) exigiria um cadastro de brinquedo grande o bastante para ser representativo. A verificação que vale hoje é a empírica, contra a geração medida: `razao_pico_potencia` ([§8.2.4](#824-verificação-do-vínculo-contra-a-geração-medida)).
+- **A pipeline ponta a ponta.** Não há teste que rode `raw → clean → curated` com um dataset de brinquedo. Hoje a garantia é a execução real, que valida a curated antes de gravar.
+- **O vínculo usina → ponto de clima** (`haversine_km` e a escolha do ponto mais próximo), coberto indiretamente pelos testes de `gerar_locais` na ingestão.
+- **Cobertura medida.** Não há `pytest-cov`; a escolha dos casos é por risco, não por percentual.
+
+---
+
+## 12. Resultados da última execução
 
 Execução de 18/09/2026, partição raw `2026-09-18`.
 
-### 11.1 Arquivos gerados
+### 12.1 Arquivos gerados
 
 | Camada | Arquivo | Linhas | Colunas | Tamanho |
 |---|---|---|---|---|
@@ -594,7 +648,7 @@ Execução de 18/09/2026, partição raw `2026-09-18`.
 | curated | `fato_manutencao.parquet` | 159 | 7 | <0,1 MB |
 | curated | `ponte_usina_aneel.parquet` | 790 | 8 | <0,1 MB |
 
-### 11.2 Flags de qualidade do ONS clean por fonte
+### 12.2 Flags de qualidade do ONS clean por fonte
 
 | Fonte | original | faltante | negativo_zerado |
 |---|---|---|---|
@@ -604,7 +658,7 @@ Execução de 18/09/2026, partição raw `2026-09-18`.
 | térmica | 254.472 | 106.224 | 0 |
 | nuclear | 3.792 | 0 | 0 |
 
-### 11.3 `dim_usina` por fonte e região
+### 12.3 `dim_usina` por fonte e região
 
 | Fonte | N | NE | S | SE | Total |
 |---|---|---|---|---|---|
@@ -612,7 +666,7 @@ Execução de 18/09/2026, partição raw `2026-09-18`.
 | solar | 9 | 78 | 4 | 47 | 138 |
 | **Total** | 10 | 228 | 21 | 49 | **308** |
 
-### 11.4 Tempo de execução
+### 12.4 Tempo de execução
 
 | Execução | Tempo |
 |---|---|
@@ -622,7 +676,7 @@ Execução de 18/09/2026, partição raw `2026-09-18`.
 
 ---
 
-## 12. Diferenças em relação ao DDL do system design
+## 13. Diferenças em relação ao DDL do system design
 
 | DDL (§4.2) | Implementado | Motivo |
 |---|---|---|
@@ -639,7 +693,7 @@ Execução de 18/09/2026, partição raw `2026-09-18`.
 
 ---
 
-## 13. Decisões de design e trade-offs
+## 14. Decisões de design e trade-offs
 
 1. **Marcar em vez de apagar.** Toda correção deixa rastro (`flag_qualidade`, `flag_data_operacao`, `flag_coordenada`, `qualidade_vinculo`, `metodo_vinculo_clima`). Quem consome decide o que filtrar. É mais trabalho no esquema, mas nenhum problema fica escondido.
 2. **Interpolar só buracos curtos (≤ 3 h, ≤ 1 dia).** Buraco curto em série física contínua é bem aproximado por reta. Buraco longo é ausência de informação, e preenchê-lo inventaria dado.
@@ -651,9 +705,9 @@ Execução de 18/09/2026, partição raw `2026-09-18`.
 
 ---
 
-## 14. Como consumir a camada curated
+## 15. Como consumir a camada curated
 
-### 14.1 pandas / ds_toolkit
+### 15.1 pandas / ds_toolkit
 
 ```python
 import pandas as pd
@@ -667,7 +721,7 @@ confiaveis = dim[dim["qualidade_vinculo"].isin(["exata", "consistente"])]
 dst.plot_serie_temporal(ger, "timestamp_utc", "energia_mwh", frequencia="D", agregacao="sum")
 ```
 
-### 14.2 DuckDB (próxima etapa do projeto)
+### 15.2 DuckDB (próxima etapa do projeto)
 
 ```sql
 CREATE TABLE dim_usina       AS SELECT * FROM read_parquet('dados/limpos/curated/dim_usina.parquet');
@@ -687,7 +741,7 @@ GROUP BY ALL;
 
 ---
 
-## 15. Limitações conhecidas e próximos passos
+## 16. Limitações conhecidas e próximos passos
 
 | # | Limitação | Impacto | Próximo passo |
 |---|---|---|---|
@@ -698,7 +752,7 @@ GROUP BY ALL;
 | 5 | Agregados "Pequenas Usinas" (63) sem cadastro | Sem potência, localização nem manutenção | Por natureza (são somatórios estaduais). Podem ser filtrados por `tipo_unidade` |
 | 6 | `fato_manutencao` herda o 1º evento de N usinas | Conjuntos grandes parecem "falhar antes" | Usar o arquivo simulado por usina para modelagem. Documentado |
 | 7 | Limpeza do ONS ~40 s (transformações com `groupby` + `lambda`) | Aceitável hoje; cresce com o histórico | Particionar o clean do ONS por mês e processar só as partições novas |
-| 8 | Sem testes automatizados | Regressões silenciosas | `pytest` para `interpolar_gaps_curtos` (buraco de 3 h interpola, de 4 h não), `completar_grade`, `_nucleo`, `base_ceg`, `_ids_estaveis` e as regras da `validacao` |
+| 8 | ~~Sem testes automatizados~~ **Resolvido:** 91 testes em `ETL/tests`, sem ler `dados/` ([§11](#11-testes-automatizados)) — `interpolar_gaps_curtos` (3 h interpola, 4 h não, e não pela metade), `completar_grade`, `base_ceg`, `_nucleo`, `_ids_estaveis` e as quatro regras da `validacao` | Resta: o `_vincular` e a pipeline ponta a ponta não têm teste ([§11.2](#112-o-que-não-é-testado)) | Um teste de integração com um cadastro de brinquedo, cobrindo `raw → clean → curated` |
 | 9 | Carga no DuckDB ainda não implementada | O banco estático ainda não existe | Etapa `load` na pipeline: gerar `solarwatch.duckdb` a partir da curated, com *build-then-swap* |
 
 ---

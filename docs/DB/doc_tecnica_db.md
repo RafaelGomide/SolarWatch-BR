@@ -462,7 +462,7 @@ O modo read-only permite **várias conexões simultâneas** ao mesmo arquivo e e
 
 ## 14. Diferenças em relação ao DDL do system design
 
-O DDL do §4.2 foi escrito antes de os dados existirem. As diferenças, todas herdadas da camada curated, estão detalhadas no [ETL §12](../ETL/doc_tecnica_etl.md#12-diferenças-em-relação-ao-ddl-do-system-design). Resumo:
+O DDL do §4.2 foi escrito antes de os dados existirem. As diferenças, todas herdadas da camada curated, estão detalhadas no [ETL §13](../ETL/doc_tecnica_etl.md#13-diferenças-em-relação-ao-ddl-do-system-design). Resumo:
 
 | Item | System design | Implementado | Motivo |
 |---|---|---|---|
@@ -489,7 +489,7 @@ O último item merece atenção: o dimensionamento do system design (§3.3) part
 | 4 | Sem testes automatizados do banco | Uma mudança no esquema pode quebrar a carga em silêncio | `pytest`: criar o banco em arquivo temporário, conferir contagens, PKs, FKs e o resultado das views |
 | 5 | Sem histórico: cada carga substitui tudo | Não dá para comparar versões do dado | Se necessário, gravar `data_carga` nas tabelas ou guardar bancos datados |
 | 6 | Metadados de proveniência não ficam no banco | O banco não sabe de qual coleta ele veio | Tabela `meta_carga` com data da carga, partição raw de origem e contagens |
-| 7 | 146 unidades sem potência e 10 sem clima | Endpoints devolvem campos nulos para elas | Melhorar o vínculo no ETL ([ETL §15](../ETL/doc_tecnica_etl.md#15-limitações-conhecidas-e-próximos-passos)) |
+| 7 | 146 unidades sem potência e 10 sem clima | Endpoints devolvem campos nulos para elas | Melhorar o vínculo no ETL ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas-e-próximos-passos)) |
 
 ---
 
