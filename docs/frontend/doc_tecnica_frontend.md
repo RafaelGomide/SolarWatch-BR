@@ -21,7 +21,7 @@
 11. [Acessibilidade](#11-acessibilidade)
 12. [Verificação no navegador](#12-verificação-no-navegador)
 13. [Decisões de design](#13-decisões-de-design)
-14. [Limitações e próximos passos](#14-limitações-e-próximos-passos)
+14. [Limitações conhecidas](#14-limitações-conhecidas)
 
 ---
 
@@ -309,18 +309,18 @@ O painel foi carregado no navegador contra o backend real (porta 8088) e verific
 
 ---
 
-## 14. Limitações e próximos passos
+## 14. Limitações conhecidas
 
-| # | Limitação | Impacto | Próximo passo |
-|---|---|---|---|
-| 1 | Sem mapa | Lat/lon aparecem como texto, embora 162 unidades tenham coordenada | Mapa com SVG do Brasil ou Leaflet (a decidir: Leaflet traria a primeira dependência) |
-| 2 | Gráficos sem tooltip | Não dá para ler o valor exato de um ponto | Camada de hover com `<rect>` transparentes por ponto e um balão posicionado |
-| 3 | Sem estado na URL da lista | Filtros não são compartilháveis nem sobrevivem ao recarregar | Sincronizar `fonte`/`regiao` com `URLSearchParams` |
-| 4 | Sem comparação entre usinas | Só dá para ver uma por vez | Página de comparação com séries sobrepostas |
-| 5 | Sem testes automatizados **(a única parte do projeto sem suíte)** | Regressões visuais e de lógica passam despercebidas | Falta uma dependência, não um teste: o ambiente não tem Node nem navegador headless, e as 549 verificações do resto do projeto rodam só com `pytest`. Primeiros alvos, todos funções puras de `api.js`/`usina.js`: `fmt.*` (formatação pt-BR), `escapar` (injeção em `innerHTML`), `TIPOS_UNIDADE`, `latenciaDaSerie` e `corDaProbabilidade` — com Vitest ou `node --test`. Depois, um smoke por página com Playwright |
-| 6 | Sem `Cache-Control` nos estáticos | Recarrega tudo a cada visita | Configurar cabeçalhos no `StaticFiles` do backend |
-| 7 | Traduções fixas em português | Sem i18n | Só se houver público para isso; hoje seria complexidade sem retorno |
-| 8 | Sem indicação de "dado velho" | Se o ETL parar, o painel mostra dado antigo sem alarde | Destacar o KPI de período quando o fim for anterior a N dias |
+| # | Limitação | Impacto |
+|---|---|---|
+| 1 | Sem mapa | Lat/lon aparecem como texto, embora 162 unidades tenham coordenada |
+| 2 | Gráficos sem tooltip | Não dá para ler o valor exato de um ponto |
+| 3 | Sem estado na URL da lista | Os três filtros (fonte, tipo de unidade, subsistema) não são compartilháveis nem sobrevivem ao recarregar |
+| 4 | Sem comparação entre usinas | Só dá para ver uma por vez |
+| 5 | Sem testes automatizados — **a única parte do projeto sem suíte** | Regressões visuais e de lógica passam despercebidas. É falta de dependência, não de teste: o ambiente não tem Node nem navegador headless, e as 549 verificações do resto do projeto rodam só com `pytest`. As funções puras de `api.js`/`usina.js` (`fmt.*`, `escapar`, `TIPOS_UNIDADE`, `latenciaDaSerie`, `corDaProbabilidade`) são as que mais pedem cobertura |
+| 6 | Sem `Cache-Control` nos estáticos | Recarrega tudo a cada visita |
+| 7 | Traduções fixas em português | Sem i18n |
+| 8 | Sem indicação de "dado velho" | Se o ETL parar, o painel mostra dado antigo sem alarde |
 
 ---
 

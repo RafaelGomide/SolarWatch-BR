@@ -24,7 +24,7 @@
 14. [Desempenho medido](#14-desempenho-medido)
 15. [Problemas encontrados e como foram resolvidos](#15-problemas-encontrados-e-como-foram-resolvidos)
 16. [Divergências em relação ao system design](#16-divergências-em-relação-ao-system-design)
-17. [Limitações e próximos passos](#17-limitações-e-próximos-passos)
+17. [Limitações conhecidas](#17-limitações-conhecidas)
 
 ---
 
@@ -70,7 +70,10 @@ backend/
 │   ├── usinas.py       # /usinas...
 │   ├── geracao.py      # /geracao...
 │   └── sistema.py      # /health, /metrics
-└── tests/test_api.py   # 24 testes de contrato
+└── tests/
+    ├── test_api.py         # 35 testes de contrato (contra o banco real)
+    ├── test_unidades.py    # 50 testes das peças: cursor, erros, limites, métricas, logs
+    └── test_modelos_ml.py  # 16 testes do registro de modelos e da conexão
 ```
 
 A separação **rota → serviço → banco/modelo** mantém as rotas finas: cada função de rota valida entrada, chama um serviço e devolve. O SQL fica concentrado em `servicos.py` e o uso dos modelos em `servicos_ml.py`, o que torna os dois testáveis sem subir a aplicação.
@@ -435,7 +438,7 @@ O alvo do system design é **50 ms (p50)**. As três últimas passam disso, por 
 - `/previsao` reconstrói as features e roda o Gradient Boosting por request;
 - a série de 15 dias paga a conversão DuckDB → DataFrame → JSON de 360 pontos.
 
-Como o banco é **estático**, todos os três são resolvíveis por cache: a resposta só muda quando o ETL roda. É o item 1 da [§17](#17-limitações-e-próximos-passos).
+Como o banco é **estático**, todos os três são resolvíveis por cache: a resposta só muda quando o ETL roda. É o item 1 da [§17](#17-limitações-conhecidas).
 
 ---
 
@@ -474,26 +477,26 @@ O `skipif` consultava o registro de modelos no momento do import, quando o `life
 | Item | Design | Implementado | Motivo |
 |---|---|---|---|
 | Rate limiting | `slowapi` | Token bucket próprio | O `slowapi` é incompatível com esta versão do FastAPI e desativava o limite sem avisar ([§15.1](#151-o-rate-limit-do-slowapi-não-funcionava-silenciosamente)) |
-| `/usinas/{id}/previsao` | Previsão por usina | Rateio da previsão da fonte, declarado em `metodo` | O modelo foi treinado no agregado por fonte; um modelo por usina é trabalho futuro ([séries temporais §15](../ML/doc_tecnica_series_temporais.md#15-limitações-e-próximos-passos)) |
+| `/usinas/{id}/previsao` | Previsão por usina | Rateio da previsão da fonte, declarado em `metodo` | O modelo foi treinado no agregado por fonte ([séries temporais §15](../ML/doc_tecnica_series_temporais.md#15-limitações-conhecidas)) |
 | Resposta de `/geracao` | Array puro | Objeto com metadados + `data` | Permite devolver `total_mwh`, cobertura e o nome da usina sem uma segunda chamada |
 | Resposta de `/sobrevivencia` | `horizonte_dias[]` + `probabilidade[]` | Lista de objetos + campos de contexto | Dois arrays paralelos são fáceis de desalinhar; e os campos `simulado`, `aviso` e `metodo_extrapolacao` precisavam existir |
 | Latência | 50 ms p50 | 11–170 ms conforme o endpoint | Volume real ficou 600× acima do estimado no design ([banco §14](../DB/doc_tecnica_db.md#14-diferenças-em-relação-ao-ddl-do-system-design)) |
 
 ---
 
-## 17. Limitações e próximos passos
+## 17. Limitações conhecidas
 
-| # | Limitação | Impacto | Próximo passo |
-|---|---|---|---|
-| 1 | Sem cache de resposta | 3 endpoints acima do orçamento de latência | Cache em memória com invalidação por mtime do `.duckdb` — o dado só muda no ETL, então o cache é trivialmente correto |
-| 2 | Previsão por usina é rateio | Precisão limitada por usina | Treinar modelos por usina (`--series usina` já existe no treino) |
-| 3 | Rate limit em memória | Não sobrevive a redeploy nem a múltiplas instâncias | Aceitável com instância única; se escalar, migrar para Redis |
-| 4 | Sem frontend ainda | `/app` só é montado se a pasta existir | Construir o frontend estático |
-| 5 | Sem CI | Testes rodam só localmente | GitHub Actions com `ruff` + `pytest` (§13.2 do design) |
-| 6 | Sem cabeçalhos de cache HTTP | Cliente não sabe que o dado é estático | `Cache-Control` e `ETag` derivados da data do ETL |
-| 7 | `/metrics` aberto | Qualquer um lê as métricas | Não há dado sensível ali, mas em produção vale restringir por IP ou token |
-| 8 | Sem testes de carga | O número de 100 req/s do design nunca foi verificado | `locust` ou `hey` contra o processo local, comparando com o orçamento |
+| # | Limitação | Impacto |
+|---|---|---|
+| 1 | Sem cache de resposta | 3 endpoints ficam acima do orçamento de latência ([§14](#14-desempenho-medido)); o dado só muda no ETL, então a repetição é desperdício puro |
+| 2 | Previsão por usina é **rateio** da previsão da fonte | Precisão limitada por usina; o campo `metodo` e `participacao_usina` declaram a aproximação na resposta |
+| 3 | Rate limit em memória do processo | Não sobrevive a redeploy nem a múltiplas instâncias (aceitável com instância única, que é o desenho atual) |
+| 4 | Sem CI | Os 101 testes rodam só localmente |
+| 5 | Sem cabeçalhos de cache HTTP (`Cache-Control`, `ETag`) | O cliente não sabe que o dado é estático e recarrega sempre |
+| 6 | `/metrics` aberto | Qualquer um lê as métricas; não há dado sensível ali, mas em produção seria restrito |
+| 7 | Sem testes de carga | O número de 100 req/s do design nunca foi verificado |
+| 8 | Endpoints de estimativa cobrem 93 das 308 unidades | As demais não têm potência ou data de operação confiáveis, e recebem 404 explicando qual dos dois motivos é ([§6.6](#66-get-usinasidsobrevivencia)) |
 
 ---
 
-*Documento gerado em 20/09/2026 a partir do código de `backend/`, da execução real dos 24 testes e das medições de latência no Uvicorn local.*
+*Documento gerado em 20/09/2026 a partir do código de `backend/`, da execução real dos testes e das medições de latência no Uvicorn local. Revisado em 06/10/2026: filtro `tipo_unidade`, 101 testes (§13) e situação atual das limitações.*

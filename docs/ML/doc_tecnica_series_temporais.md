@@ -25,7 +25,7 @@
 12. [Como usar um modelo salvo](#12-como-usar-um-modelo-salvo)
 13. [Premissas e riscos declarados](#13-premissas-e-riscos-declarados)
 14. [Testes automatizados](#14-testes-automatizados)
-15. [Limitações e próximos passos](#15-limitações-e-próximos-passos)
+15. [Limitações conhecidas](#15-limitações-conhecidas)
 
 ---
 
@@ -60,6 +60,7 @@ ML/
 │   ├── backtesting.py   # janela deslizante (rolling origin)
 │   ├── metricas.py      # RMSE, MAE, MAPE, sMAPE, nRMSE, viés
 │   ├── treinar.py       # orquestra: backtest → comparação → reajuste → pickle
+│   ├── tests/           # 32 testes: features anti-vazamento, métricas, baselines, backtesting
 │   └── resultados/      # gráficos gerados (backtest_solar.png, backtest_eolica.png)
 └── modelos/             # artefatos: pickles + metadados + métricas + previsões
 ```
@@ -118,7 +119,7 @@ Depois:
 | `solar` | 1.896 h | 01/07 → 17/09/2026 | 12.632 MWh/h | **26,6%** | Ciclo diário forte; zero à noite |
 | `eolica` | 1.896 h | 01/07 → 17/09/2026 | 14.938 MWh/h | 0% | Ciclo diário mais fraco, mais ruído |
 
-79 dias de histórico são **pouco** para séries temporais: não há ciclo anual, e a sazonalidade semanal é frágil. Está registrado em [§15](#15-limitações-e-próximos-passos).
+79 dias de histórico são **pouco** para séries temporais: não há ciclo anual, e a sazonalidade semanal é frágil. Está registrado em [§15](#15-limitações-conhecidas).
 
 ---
 
@@ -292,7 +293,7 @@ Duas conclusões:
 
 > A importância foi medida **dentro da amostra de treino**, então serve para entender o modelo, não como evidência de desempenho. A comparação honesta de desempenho é o backtesting.
 
-Esse resultado motiva o item 1 da [§15](#15-limitações-e-próximos-passos): usar clima **horário e por usina** deve mudar bastante o quadro da solar.
+Esse resultado motiva o item 1 da [§15](#15-limitações-conhecidas): usar clima **horário e por usina** deve mudar bastante o quadro da solar.
 
 ---
 
@@ -378,20 +379,20 @@ As métricas têm testes próprios porque é onde o número engana: o **MAPE ign
 
 ---
 
-## 15. Limitações e próximos passos
+## 15. Limitações conhecidas
 
-| # | Limitação | Impacto | Próximo passo |
-|---|---|---|---|
-| 1 | Clima diário, médio de 10 pontos | Na solar, o clima é quase inútil (0,4% da importância) | Coletar clima **horário por usina** (ver limitação 2 do ETL) e reavaliar. É a mudança com maior potencial de ganho |
-| 2 | Histórico de 79 dias | Sem sazonalidade anual; o modelo pode degradar fora da janela observada | Ampliar a ingestão do ONS para 2+ anos (barato em Parquet: ~4,6 MB/mês) |
-| 3 | Hiperparâmetros fixos | O Gradient Boosting não foi otimizado | `ds_toolkit.otimizar_hiperparametros` com validação temporal (`TimeSeriesSplit`), nunca `KFold` comum |
-| 4 | Sem intervalo de previsão | A API devolveria só o valor pontual | Quantile regression (`loss="quantile"`) para P10/P90, ou intervalos empíricos a partir dos resíduos do backtesting |
-| 5 | Prophet não avaliado | O escopo citava "SARIMA **ou** Prophet" | O SARIMA cobre o papel de modelo estatístico interpretável. Prophet acrescentaria feriados e mudança de tendência, ao custo de mais uma dependência pesada |
-| 6 | Só horizonte de 24 h | A API pode querer 48 h ou 7 dias | O código é parametrizado (`--horizonte`); basta revalidar, lembrando que as defasagens mínimas acompanham o horizonte |
-| 7 | Modelos por fonte, não por usina | O endpoint `/usinas/{id}/previsao` precisa de previsão por usina | `--series usina` já funciona; falta rodar para todas as unidades relevantes e decidir entre um modelo por usina ou um modelo global com `usina_id` como feature |
-| 8 | ~~Sem testes automatizados~~ **Resolvido:** 32 testes em `ML/series_temporais/tests` ([§14](#14-testes-automatizados)) — as garantias anti-vazamento da [§5.1](#51-garantia-anti-vazamento), `origens()` sem sobreposição, as métricas e os baselines | Resta: `dados.py` (leitura do banco) e `treinar.py` não têm teste | Dependem do banco; ficariam num teste de integração com DuckDB de brinquedo |
-| 9 | Sem monitoramento de deriva | O modelo envelhece silenciosamente | Recalcular o RMSE das últimas janelas a cada atualização de dado e comparar com o valor registrado nos metadados |
+| # | Limitação | Impacto |
+|---|---|---|
+| 1 | Clima diário, médio de 10 pontos regionais | Na solar o clima fica quase inútil: 0,4% da importância ([§10](#10-importância-das-features)). É a limitação com maior potencial de ganho, e depende da limitação 2 do [ETL](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas) |
+| 2 | Histórico de 79 dias | Sem sazonalidade anual; o modelo pode degradar fora da janela observada e a sazonalidade semanal é frágil |
+| 3 | Hiperparâmetros fixos | O Gradient Boosting não foi otimizado — qualquer otimização precisaria de validação temporal (`TimeSeriesSplit`), nunca `KFold` comum |
+| 4 | Sem intervalo de previsão | A API devolve só o valor pontual |
+| 5 | Prophet não avaliado | O escopo citava "SARIMA **ou** Prophet"; o SARIMA cobre o papel de modelo estatístico interpretável |
+| 6 | Só horizonte de 24 h validado | O código é parametrizado (`--horizonte`), mas 48 h ou 7 dias exigiriam revalidar — as defasagens mínimas acompanham o horizonte |
+| 7 | Modelos por fonte, não por usina | `/usinas/{id}/previsao` precisa ratear a previsão da fonte pela participação histórica da usina. `--series usina` existe no treino, mas não é o que está em produção |
+| 8 | Os 32 testes ([§14](#14-testes-automatizados)) cobrem features, métricas, baselines e backtesting | Ficam fora `dados.py` (leitura do banco) e `treinar.py` (orquestração), que dependem do banco |
+| 9 | Sem monitoramento de deriva | O modelo envelhece silenciosamente: nada compara o RMSE das janelas recentes com o registrado nos metadados |
 
 ---
 
-*Documento gerado em 19/09/2026 a partir do código de `ML/series_temporais/` e da execução real do backtesting (6 janelas, dados do banco de 18/09/2026).*
+*Documento gerado em 19/09/2026 a partir do código de `ML/series_temporais/` e da execução real do backtesting (6 janelas, dados do banco de 18/09/2026). Revisado em 06/10/2026: testes automatizados (§14) e situação atual das limitações.*

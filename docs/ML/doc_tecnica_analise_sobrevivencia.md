@@ -25,7 +25,7 @@
 13. [Decisões metodológicas](#13-decisões-metodológicas)
 14. [Eventos recorrentes: Andersen-Gill e PWP](#14-eventos-recorrentes-andersen-gill-e-pwp)
 15. [Testes automatizados](#15-testes-automatizados)
-16. [Limitações e próximos passos](#16-limitações-e-próximos-passos)
+16. [Limitações conhecidas](#16-limitações-conhecidas)
 
 ---
 
@@ -59,7 +59,7 @@ ML/analise_sobrevivencia/
 ├── avaliacao.py         # C-index k-fold, Schoenfeld, recuperação dos betas, calibração
 ├── treinar.py           # 1º evento: orquestra tudo, salva pickles e tabelas
 ├── treinar_recorrentes.py  # eventos recorrentes: AG, PWP, MCF e manutenções esperadas
-├── tests/               # 29 testes do gerador: invariantes, determinismo, recuperação dos betas
+├── tests/               # 85 testes: gerador (29), modelos e avaliação (26), recorrentes (30)
 └── resultados/          # kaplan_meier_por_fonte.png, calibracao.png, probabilidades_12m.png,
                          # mcf_recorrentes.png, schoenfeld_ph_violado.png
 ```
@@ -650,22 +650,22 @@ Dois testes mediram coisas que valem como resultado:
 
 ---
 
-## 16. Limitações e próximos passos
+## 16. Limitações conhecidas
 
-| # | Limitação | Impacto | Próximo passo |
-|---|---|---|---|
-| 1 | **Eventos sintéticos** | Nenhuma conclusão vale para o mundo real | Substituir pelo histórico real de O&M, se houver acesso; o pipeline não muda |
-| 1b | População = usinas hoje em operação | Viés de sobrevivente | Quantificado como pequeno nesta população ([dados simulados §4.4](../ingestao/doc_tecnica_dados_simulados.md#44-viés-de-sobrevivente-quem-já-não-está-no-cadastro)); refazer quando o parque envelhecer |
-| 2 | C-index de 0,577 | Discriminação fraca | É o teto deste gerador. Com dado real, avaliar se há sinal mais forte |
-| 3 | Só 93 das 308 unidades recebem previsão | Cobertura parcial do frontend | Melhorar o vínculo ONS × ANEEL ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas-e-próximos-passos)) |
-| 4 | Efeitos regionais imprecisos | ICs largos, estimativas distantes | Inerente à geografia do parque; só mais dados resolvem |
-| 4b | Coeficientes atenuados pela fragilidade não modelada | O Cox de produção estima o efeito **marginal**, menor que o condicional ([§7.2](#72-coeficientes)) | Cox com fragilidade compartilhada (não disponível no lifelines) ou estimação via NB, como na [§14.7](#147-fragilidade-gama-por-usina) |
-| 5 | ~~Um evento por usina~~ **Resolvido:** Andersen-Gill e PWP sobre o painel de episódios ([§14](#14-eventos-recorrentes-andersen-gill-e-pwp)), servidos em `/usinas/{id}/recorrencia` e num card próprio | Resta: a fragilidade por usina não é exposta na API | Expor `frailty_posterior` como sinal de alerta ([§14.8](#148-o-que-entrou-no-produto-e-o-que-ficou-de-fora)) |
-| 6 | Sem intervalo na probabilidade | O card mostra um ponto | Bootstrap sobre os coeficientes do Cox para banda de confiança |
-| 7 | Extrapolação Weibull não validada | 21 usinas dependem dela, fora do suporte observado | Por definição não há dado para validar; sinalizar no frontend quando `metodo_extrapolacao = "weibull"` |
-| 8 | ~~Sem testes automatizados~~ **Resolvido:** 85 testes em `ML/analise_sobrevivencia/tests` ([§15](#15-testes-automatizados)) — invariantes, probabilidade em [0,1], monotonicidade no horizonte, a regressão do [§10](#10-o-bug-da-extrapolação-e-como-foi-resolvido) e a aritmética dos recorrentes | Resta: `treinar.py` e `treinar_recorrentes.py` (a orquestração) não têm teste; o que é testado são as funções que eles chamam | Um teste `slow` que rode o treino inteiro numa amostra e confira os artefatos gravados |
-| 9 | Sem covariáveis operacionais | O modelo só conhece cadastro | Quando houver mais histórico, incluir fator de capacidade, horas de operação e clima acumulado (vento/temperatura) como covariáveis |
+| # | Limitação | Impacto |
+|---|---|---|
+| 1 | **Os eventos são sintéticos** | Nenhum número aqui descreve a confiabilidade real de uma usina. O que o modelo demonstra é o método; `simulado: true` e `aviso` viajam no payload da API para isso não se perder |
+| 2 | População = usinas **hoje** em operação (o SIGA não registra saída) | Viés de sobrevivente, quantificado como pequeno nesta população: só 2,9% das usinas têm 15+ anos e a mediana KM se move 3,4% no pior caso ([dados simulados §4.4](../ingestao/doc_tecnica_dados_simulados.md#44-viés-de-sobrevivente-quem-já-não-está-no-cadastro)) |
+| 3 | C-index de 0,577 | Discriminação fraca — é o teto deste gerador, onde a maior parte da variação é aleatória por construção |
+| 4 | Só 93 das 308 unidades recebem previsão | Cobertura parcial do frontend; as demais não têm potência ou data de operação confiáveis ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas)) |
+| 5 | Efeitos regionais imprecisos | ICs largos (o do Norte é 6× o de potência) e estimativas distantes do verdadeiro, com 24 usinas no estrato. Inerente à geografia do parque |
+| 6 | Coeficientes atenuados pela fragilidade não modelada | O Cox de produção estima o efeito **marginal**, menor que o condicional ([§7.2](#72-coeficientes)). A fragilidade é estimada à parte, via binomial negativa ([§14.7](#147-fragilidade-gama-por-usina)), e não entra no modelo servido |
+| 7 | A fragilidade por usina não é exposta na API | `frailty_posterior` é o sinal mais direto de "esta usina falha mais do que o perfil dela prevê", e hoje fica só na análise ([§14.8](#148-o-que-entrou-no-produto-e-o-que-ficou-de-fora)) |
+| 8 | Sem intervalo na probabilidade servida | O card mostra um ponto, sem banda de confiança |
+| 9 | Extrapolação Weibull não validada | 21 unidades caem fora do suporte observado e dependem dela; por definição não há dado para validar. A resposta marca `metodo_extrapolacao` |
+| 10 | Sem covariáveis operacionais | O modelo só conhece cadastro (potência, região, ano). Fator de capacidade e clima acumulado existem numa variante do gerador ([dados simulados §9.4](../ingestao/doc_tecnica_dados_simulados.md#94-variante-com-covariáveis-do-ons-e-da-nasa--eventos_manutencao_climaparquet)), mas o vínculo ONS × ANEEL só mede o fator de capacidade de 31% das usinas |
+| 11 | Os 85 testes ([§15](#15-testes-automatizados)) cobrem as funções, não a orquestração | `treinar.py` e `treinar_recorrentes.py` não têm teste; o que é verificado são os modelos e as contas que eles chamam |
 
 ---
 
-*Documento gerado em 19/09/2026 a partir do código de `ML/analise_sobrevivencia/` e da execução real (1.854 usinas de treino, 93 unidades de predição).*
+*Documento gerado em 19/09/2026 a partir do código de `ML/analise_sobrevivencia/` e da execução real (1.854 usinas de treino, 93 unidades de predição). Revisado em 06/10/2026: testes automatizados (§15) e situação atual das limitações.*

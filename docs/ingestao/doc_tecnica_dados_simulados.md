@@ -25,7 +25,6 @@
 12. [Validação: o modelo recupera os parâmetros?](#12-validação-o-modelo-recupera-os-parâmetros)
 13. [Como usar na análise de sobrevivência](#13-como-usar-na-análise-de-sobrevivência)
 14. [Limitações e premissas](#14-limitações-e-premissas)
-15. [Próximos passos](#15-próximos-passos)
 
 ---
 
@@ -725,7 +724,7 @@ Isso **não é defeito da simulação**, e sim reflexo da geografia real do parq
 
 ### 12.4 Checagens de sanidade
 
-Automatizáveis em testes (ver [§15](#15-próximos-passos)):
+Verificadas pelos testes automatizados de `ML/analise_sobrevivencia/tests` ([análise §15](../ML/doc_tecnica_analise_sobrevivencia.md#15-testes-automatizados)):
 
 - invariantes da [§9](#9-esquema-do-arquivo-de-saída);
 - a mesma semente gera um parquet idêntico (exceto `gerado_em` no `.meta.json`);
@@ -815,40 +814,19 @@ cph.predict_median(novas)                                   # tempo mediano até
 
 ## 14. Limitações e premissas
 
-| # | Limitação / premissa | Impacto | Como mitigar |
-|---|---|---|---|
-| 1 | **Os eventos são sintéticos** | Nenhuma conclusão sobre confiabilidade real | Sempre rotular como simulado na API/frontend e trocar por dado real se houver. Um caminho já preparado: a ingestão passou a arquivar retratos datados da ANEEL (`historico_aneel/`, ver `doc_tecnica_ingestao.md` §8.5), e a transição de fase `Construção` → `Operação` entre dois retratos é um **evento real com data observada** |
-| 2 | ~~**Só o 1º evento** por usina~~ **Resolvido:** o gerador produz o processo completo em `eventos_manutencao_recorrentes.parquet` ([§9.1](#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)), a análise ajusta Andersen-Gill e PWP, e as manutenções esperadas são servidas em `/usinas/{id}/recorrencia` com card próprio | — | — |
-| 3 | `tipo_evento` independente do tempo | Não serve para riscos competitivos (Fine-Gray, cause-specific) | Gerar um tempo latente por causa e observar o mínimo |
-| 4 | ~~Linha de base igual para todas as usinas da mesma fonte~~ **Resolvido:** fragilidade gama por usina, com `theta = 0,5` ([§5.1](#51-fragilidade-frailty-gama-por-usina)) | Resta: os modelos ajustados não incluem a fragilidade, então estimam efeitos marginais atenuados | Estimador via binomial negativa já implementado ([doc da análise §14.7](../ML/doc_tecnica_analise_sobrevivencia.md#147-fragilidade-gama-por-usina)); falta um Cox com fragilidade compartilhada |
-| 5 | ~~Efeitos das covariáveis constantes no tempo~~ **Resolvido:** variante `eventos_manutencao_ph_violado.parquet` com efeito que muda no tempo ([§9.2](#92-variante-com-efeito-tempo-dependente--eventos_manutencao_ph_violadoparquet)), usada para medir o poder do teste de Schoenfeld | — | — |
-| 6 | ~~Censura apenas administrativa~~ **Resolvido:** censura aleatória exponencial independente, a 0,03/ano, que atinge 10,9% das usinas ([§7.4](#74-censura-aleatória-independente)) | — | — |
-| 7 | População = usinas **hoje** em operação | Viés de sobrevivente no cadastro | **Quantificado** ([§4.4](#44-viés-de-sobrevivente-quem-já-não-está-no-cadastro)): o SIGA não registra saída, só 2,9% das usinas têm 15+ anos, e mesmo perdendo metade dessa coorte a mediana KM se move 3,4%. Refazer a conta quando o parque envelhecer |
-| 8 | Parâmetros são premissas de ordem de grandeza | Valores absolutos (medianas de 4–5 anos) podem não refletir o setor | Calibrar com literatura de O&M ou dados de operadores se disponíveis |
-| 9 | Subsistema derivado da UF principal | Usinas em mais de um município/UF usam só a principal | Irrelevante nesta escala |
-| 10 | Tempo contado da entrada em **operação comercial** | Falhas no comissionamento não entram | Coerente com a definição de "evento de manutenção corretiva em operação" |
+O que **hoje** limita o gerador e o que ele assume. Os itens resolvidos (eventos recorrentes, fragilidade por usina, efeito tempo-dependente, censura aleatória, riscos competitivos e covariáveis externas) saíram desta lista e estão descritos na [§5.1](#51-fragilidade-frailty-gama-por-usina), na [§7.4](#74-censura-aleatória-independente) e na [§9](#9-esquema-do-arquivo-de-saída).
 
----
-
-## 15. Próximos passos
-
-Todos os itens desta lista foram feitos. O que cada um virou:
-
-| # | Item | Onde está |
+| # | Limitação / premissa | Impacto |
 |---|---|---|
-| 1 | **Testes automatizados** | `ML/analise_sobrevivencia/tests/` — 29 testes: invariantes da [§9](#9-esquema-do-arquivo-de-saída), determinismo por semente, flags, e recuperação de $\beta$ com a população replicada 10× |
-| 2 | **Estudo de Monte Carlo** | [§12.5](#125-estudo-de-monte-carlo) — 30 conjuntos, com viés, REQM e cobertura por covariável |
-| 3 | **Variantes por flag** | *frailty* ([§5.1](#51-fragilidade-frailty-gama-por-usina)), recorrentes ([§9.1](#91-eventos-recorrentes--eventos_manutencao_recorrentesparquet)), censura aleatória ([§7.4](#74-censura-aleatória-independente)), riscos competitivos ([§9.3](#93-variante-com-riscos-competitivos--eventos_manutencao_competitivosparquet)) e PH violado ([§9.2](#92-variante-com-efeito-tempo-dependente--eventos_manutencao_ph_violadoparquet)) |
-| 4 | **Carga no DuckDB** | tabela `fato_manutencao` com `simulado BOOLEAN NOT NULL`, e `/usinas/{id}/sobrevivencia` devolvendo `simulado: true` + `aviso` no payload ([backend §6.6](../backend/doc_tecnica_backend.md#66-get-usinasidsobrevivencia)) |
-| 5 | **Cruzamento com ONS/NASA** | [§9.4](#94-variante-com-covariáveis-do-ons-e-da-nasa--eventos_manutencao_climaparquet) — vento, temperatura e fator de capacidade real como covariáveis, com os $\beta$ recuperados |
-
-O que ficou em aberto, agora em outro nível:
-
-1. **Promover a variante com clima a padrão**, quando o vínculo ONS×ANEEL cobrir mais que os 31% atuais.
-2. **Modelar a fragilidade dentro do Cox de produção**, não só estimá-la à parte — hoje os coeficientes publicados são os marginais, atenuados.
-3. **Riscos competitivos no produto:** a API serve "probabilidade de alguma manutenção"; com a variante competitiva, daria para servir "probabilidade de falha de inversor", que é o que a operação compra peça para resolver.
-4. **Substituir o gerador por dado real de O&M**, que continua sendo o único jeito de as conclusões valerem fora do exercício.
+| 1 | **Os eventos são sintéticos** | Nenhuma conclusão sobre confiabilidade real. Rotulados como simulados na API e no frontend. O caminho para dado real já está preparado: a ingestão arquiva retratos datados da ANEEL (`historico_aneel/`, [ingestão §8.5](doc_tecnica_ingestao.md#85-retratos-datados--historico_aneel)), e a transição `Construção → Operação` entre dois retratos é um **evento real com data observada** |
+| 2 | No conjunto principal, `tipo_evento` é sorteado depois do tempo | O rótulo de causa não carrega informação ali. Para riscos competitivos existe a variante com um relógio por causa ([§9.3](#93-variante-com-riscos-competitivos--eventos_manutencao_competitivosparquet)), que **não** é o arquivo padrão |
+| 3 | A fragilidade é gerada, mas os modelos de produção não a incluem | Os efeitos estimados são marginais, atenuados (medido: −0,020 em `log_potencia_mw_c`). O estimador via binomial negativa existe ([análise §14.7](../ML/doc_tecnica_analise_sobrevivencia.md#147-fragilidade-gama-por-usina)); um Cox com fragilidade compartilhada, não |
+| 4 | População = usinas **hoje** em operação | Viés de sobrevivente no cadastro, quantificado ([§4.4](#44-viés-de-sobrevivente-quem-já-não-está-no-cadastro)): o SIGA não registra saída, só 2,9% das usinas têm 15+ anos, e mesmo perdendo metade dessa coorte a mediana KM se move 3,4% |
+| 5 | Os parâmetros são premissas de ordem de grandeza | Os valores absolutos (medianas de 4–5 anos) podem não refletir o setor; sem literatura de O&M ou dado de operador para calibrar |
+| 6 | A variante com clima cobre o fator de capacidade real de 31% das usinas | Por isso ela não substitui o conjunto principal ([§9.4](#94-variante-com-covariáveis-do-ons-e-da-nasa--eventos_manutencao_climaparquet)): o limite é o vínculo ONS × ANEEL, não o gerador |
+| 7 | Subsistema derivado da UF principal | Usinas em mais de um município/UF usam só a principal; irrelevante nesta escala |
+| 8 | Tempo contado da entrada em **operação comercial** | Falhas no comissionamento não entram, o que é coerente com a definição de "manutenção corretiva em operação" |
 
 ---
 
-*Documento gerado em 18/09/2026 a partir do código e da execução real de `dados_simulados.py` (seed 42).*
+*Documento gerado em 18/09/2026 a partir do código e da execução real de `dados_simulados.py` (seed 42). Revisado em 06/10/2026: situação atual das limitações e premissas.*

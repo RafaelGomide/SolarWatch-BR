@@ -26,7 +26,7 @@
 13. [Diferenças em relação ao DDL do system design](#13-diferenças-em-relação-ao-ddl-do-system-design)
 14. [Decisões de design e trade-offs](#14-decisões-de-design-e-trade-offs)
 15. [Como consumir a camada curated](#15-como-consumir-a-camada-curated)
-16. [Limitações conhecidas e próximos passos](#16-limitações-conhecidas-e-próximos-passos)
+16. [Limitações conhecidas](#16-limitações-conhecidas)
 
 ---
 
@@ -52,7 +52,7 @@ O ETL transforma o que a ingestão baixou (ONS, NASA POWER, ANEEL) e os eventos 
        dim_usina · fato_geracao · fato_clima · fato_manutencao · ponte_usina_aneel
                     │
                     ▼
-               DuckDB (próxima etapa)
+               DuckDB (DB/criar_banco.py)
 ```
 
 | Camada | Pergunta que responde | Regra de ouro |
@@ -797,7 +797,7 @@ confiaveis = dim[dim["qualidade_vinculo"].isin(["exata", "consistente"])]
 dst.plot_serie_temporal(ger, "timestamp_utc", "energia_mwh", frequencia="D", agregacao="sum")
 ```
 
-### 15.2 DuckDB (próxima etapa do projeto)
+### 15.2 DuckDB
 
 ```sql
 CREATE TABLE dim_usina       AS SELECT * FROM read_parquet('dados/limpos/curated/dim_usina.parquet');
@@ -813,24 +813,25 @@ WHERE u.potencia_mw IS NOT NULL AND g.flag_qualidade <> 'faltante'
 GROUP BY ALL;
 ```
 
-> Observação: `DuckDB` ainda não está no `requirements.txt`. Ele entra quando a etapa de carga no banco for implementada.
+> O banco estático já é gerado por `python -m DB.criar_banco`, com o esquema declarado em `DB/esquema.py` (PK, FK, NOT NULL, índices e views) — as consultas acima são o equivalente manual. Ver [`docs/DB/doc_tecnica_db.md`](../DB/doc_tecnica_db.md). O `duckdb` está no `requirements.txt`.
 
 ---
 
-## 16. Limitações conhecidas e próximos passos
+## 16. Limitações conhecidas
 
-| # | Limitação | Impacto | Próximo passo |
-|---|---|---|---|
-| 1 | Vínculo por nome é heurístico: 66 conjuntos inconsistentes e 83 sem vínculo | ~52% das unidades sem potência publicada | Tabela manual de correspondência conjunto → CEGs (`ETL/referencias/`), com prioridade sobre a heurística; ou usar a lista oficial de usinas por conjunto, se o ONS publicar |
-| 2 | Clima de 10 pontos para 298 unidades (mediana de 100 km, máximo de 834 km) | Clima aproximado, fraco no Norte (sem ponto) | Gerar `locais.csv` a partir dos centroides da `dim_usina` (um ponto por unidade com coordenada) |
-| 3 | Irradiância horária da NASA com ~3 meses de atraso | `nasa_clima_horario` sem irradiância no período recente | Para modelos horários, usar janelas com mais de 3 meses ou outra fonte (por exemplo, INMET) |
-| 4 | Dia da NASA diária em hora solar local (≈ Brasília, com até ~1 h de diferença) | Desalinhamento mínimo na borda do dia | Aceitável. Documentado |
-| 5 | Agregados "Pequenas Usinas" (63) sem cadastro | Sem potência, localização nem manutenção — mas **32% da energia medida** | **Aceito por natureza:** são somatórios estaduais de MMGD, não usinas, e nenhum vínculo os resolveria ([§8.2.1](#821-a-decisão-de-grão)). Separáveis por `tipo_unidade`: filtro na API (`GET /usinas?tipo_unidade=`), no painel ("Tipo de unidade") e aviso próprio na página da unidade; os endpoints de estimativa respondem 404 dizendo que o grão é agregado, não que o vínculo falhou |
-| 6 | `fato_manutencao` herda o 1º evento de N usinas | Conjuntos grandes parecem "falhar antes" | Usar o arquivo simulado por usina para modelagem. Documentado |
-| 7 | Limpeza do ONS ~40 s (transformações com `groupby` + `lambda`) | Aceitável hoje; cresce com o histórico | Particionar o clean do ONS por mês e processar só as partições novas |
-| 8 | ~~Sem testes automatizados~~ **Resolvido:** 158 testes em `ETL/tests`, sem ler `dados/` ([§11](#11-testes-automatizados)) — as regras de limpeza e validação em isolamento, mais um teste de integração `raw → clean → curated` sobre um cadastro de brinquedo que cobre o `_vincular`, a ponte, as três fatos, os IDs estáveis e a validação barrando a gravação ([§11.2](#112-integração-raw--clean--curated)) | Resta: nada detecta regressão de desempenho (brinquedo tem 360 linhas; o real, 1,3 mi) nem mudança de contrato nas fontes | Marcar um caso grande como `slow` para medir o clean do ONS, e um teste de integração com rede rodado à parte |
-| 9 | Carga no DuckDB ainda não implementada | O banco estático ainda não existe | Etapa `load` na pipeline: gerar `solarwatch.duckdb` a partir da curated, com *build-then-swap* |
+O que **hoje** limita a camada publicada. Itens já resolvidos saíram desta lista e estão descritos nas seções correspondentes.
+
+| # | Limitação | Impacto |
+|---|---|---|
+| 1 | Vínculo por nome é heurístico: 66 conjuntos `inconsistente` e 83 `sem_vinculo` ([§8.2.3](#823-vínculo-ons--aneel-_vincular)) | 149 unidades sem potência publicada — 48% das 308. A `razao_pico_potencia` detecta o vínculo parcial, mas não o conserta |
+| 2 | Clima de **10 pontos** para 298 unidades: mediana de 100 km e máximo de 834 km até o ponto de referência | Clima regional, não da usina. 90 unidades recebem o ponto da mesma UF e 46 o do subsistema; 29 ficam a mais de 300 km (`mais_proximo_distante`) e 10 do Norte ficam sem clima. O `locais.csv` já tem 19 pontos gerados da ANEEL ([ingestão §7.3](../ingestao/doc_tecnica_ingestao.md#73-escolha-dos-locais--locaiscsv)), mas o bruto da NASA em disco ainda é o dos 10 pontos antigos: a melhora só aparece na curated depois de reingerir a NASA |
+| 3 | Irradiância horária da NASA com ~3 meses de atraso | `nasa_clima_horario` sem irradiância no período recente. A `fato_clima` usa a série **diária** por isso |
+| 4 | Dia da NASA diária em hora solar local (≈ Brasília, com até ~1 h de diferença) | Desalinhamento mínimo na borda do dia; aceito |
+| 5 | Agregados "Pequenas Usinas" (63) não têm cadastro na ANEEL **por natureza** — são somatórios estaduais de MMGD ([§8.2.1](#821-a-decisão-de-grão)) | Sem potência, localização nem manutenção, carregando **32% da energia medida**. São separáveis por `tipo_unidade` (filtro na API, filtro no painel e aviso próprio na página da unidade), e os endpoints de estimativa respondem 404 dizendo que o grão é agregado, não que o vínculo falhou |
+| 6 | `fato_manutencao` herda o 1º evento entre as N usinas de um conjunto | Conjuntos grandes parecem "falhar antes". A modelagem usa o arquivo simulado **por usina**, não esta fato |
+| 7 | Limpeza do ONS leva ~40 s (transformações com `groupby` + `lambda`) | Aceitável no histórico atual de 79 dias; cresce linearmente com ele |
+| 8 | Os 158 testes ([§11](#11-testes-automatizados)) não cobrem desempenho nem contrato das fontes | Uma regressão que faça o clean passar de 40 s para 10 min não é detectada, nem uma coluna renomeada na API da ANEEL. O conjunto de brinquedo tem 360 linhas; o real, 1,3 milhão |
 
 ---
 
-*Documento gerado em 18/09/2026 a partir do código de `ETL/` e da execução real da pipeline (partição raw 2026-09-18).*
+*Documento gerado em 18/09/2026 a partir do código de `ETL/` e da execução real da pipeline (partição raw 2026-09-18). Revisado em 06/10/2026: testes automatizados (§11) e situação atual das limitações.*

@@ -19,7 +19,7 @@
 9. [Como as três fontes se cruzam](#9-como-as-três-fontes-se-cruzam)
 10. [Compliance, segurança e privacidade](#10-compliance-segurança-e-privacidade)
 11. [Testes automatizados](#11-testes-automatizados)
-12. [Limitações conhecidas e próximos passos](#12-limitações-conhecidas-e-próximos-passos)
+12. [Limitações conhecidas](#12-limitações-conhecidas)
 
 ---
 
@@ -70,9 +70,10 @@ SolarWatch-BR/
 │   │   ├── ingestao_nasa_power.py
 │   │   ├── gerar_locais.py     # gera locais.csv a partir do cadastro da ANEEL
 │   │   └── locais.csv          # coordenadas consultadas na NASA POWER (gerado)
-│   └── aneel/
-│       ├── __init__.py
-│       └── ingestao_aneel.py
+│   ├── aneel/
+│   │   ├── __init__.py
+│   │   └── ingestao_aneel.py
+│   └── tests/                  # 101 testes, sem rede (§11)
 ├── dados/
 │   └── bruto/                  # raw layer (NÃO versionado)
 │       ├── dados_ons_bruto/            # um Parquet por mês
@@ -823,19 +824,17 @@ O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de ret
 
 ---
 
-## 12. Limitações conhecidas e próximos passos
+## 12. Limitações conhecidas
 
-| # | Limitação | Impacto | Sugestão |
-|---|---|---|---|
-| 1 | ~~Meses do ONS concatenados em memória~~ **Resolvido:** um Parquet por mês em `dados/bruto/dados_ons_bruto/`, lido por glob ([§6.2.1](#621-um-parquet-por-mês)) | — | — |
-| 2 | ~~Bruto em CSV~~ **Resolvido:** migrado para Parquet ([§4.5](#45-formato-de-saída-parquet)) | — | — |
-| 3 | ~~`get_com_retry` repete erros `4xx` não-429~~ **Resolvido:** `4xx` (exceto 429) levanta na primeira tentativa ([§5.1](#51-get_com_retrysessao-url-kwargs)) | — | — |
-| 4 | ~~Coordenadas de `locais.csv` manuais e aproximadas~~ **Resolvido:** geradas da ANEEL por `gerar_locais.py`; a capacidade com clima a ≤ 300 km subiu de 77,3% para 96,5% ([§7.3](#73-escolha-dos-locais--locaiscsv)) | Resta: um ponto por (fonte, UF) é regional, não por usina | Subir `--por-grupo`, ou consultar a NASA por usina nas maiores (custo linear em chamadas) |
-| 5 | ~~NASA: vento/temperatura atrasam ~2 dias; irradiância horária ~3 meses, diária ~1 semana~~ | Janela recente sem parte das variáveis **Tratado:** o valor `-999` vira nulo com flag `faltante`, a coluna `medidas_faltantes` diz **quais** variáveis faltaram (as latências são diferentes por variável) e a `fato_clima` usa a série diária. A API expõe as duas colunas e o frontend escreve a ressalva na tela. Para análises horárias de irradiância, usar períodos com mais de 3 meses |
-| 6 | ~~ANEEL é um retrato único, sobrescrito~~ **Resolvido:** cada execução arquiva `historico_aneel/dados_aneel_bruto_AAAA-MM-DD.parquet`, com data lida de `DatGeracaoConjuntoDados`, e `--mudancas-de-fase` compara dois retratos ([§8.5](#85-retratos-datados--historico_aneel)) | Resta: só há um retrato arquivado, então ainda não há série histórica para a análise de sobrevivência usar | Rodar a ingestão periodicamente (o valor aparece com o tempo) |
-| 7 | ~~Sem testes automatizados~~ **Resolvido:** 93 testes em `ingestao/tests` com `pytest` + `responses`, sem rede ([§11](#11-testes-automatizados)) | Resta: mudança de contrato nas APIs públicas não é detectada | Um teste de integração com rede, rodado à parte e tolerante a indisponibilidade |
-| 8 | ~~Três comandos separados~~ **Resolvido:** `python -m ingestao` roda as etapas na ordem canônica, com `--fontes`, `--listar`, `--seguir` e resumo final ([§3.2.1](#321-o-orquestrador--ingestao__main__py)) | — | — |
+O que **hoje** limita a ingestão. Os itens resolvidos ao longo do projeto (um Parquet por mês, bruto em Parquet, retry correto em `4xx`, `locais.csv` gerado da ANEEL, retratos datados, testes sem rede e o orquestrador) saíram desta lista e estão descritos nas seções acima.
+
+| # | Limitação | Impacto |
+|---|---|---|
+| 1 | Um ponto de clima por (fonte, UF): 19 pontos no `locais.csv` ([§7.3](#73-escolha-dos-locais--locaiscsv)) | Clima **regional**, não por usina. Além disso, o bruto da NASA em disco ainda é o dos 10 pontos antigos — a cobertura de 96,5% da capacidade a ≤ 300 km só chega à camada curada depois de reingerir a NASA com o `locais.csv` novo |
+| 2 | Latência desigual da NASA: vento e temperatura ~2 dias, irradiância diária ~1 semana, horária ~3 meses | A janela recente vem sem parte das variáveis. Tratado, não eliminado: `-999` vira nulo com flag `faltante`, `medidas_faltantes` diz **quais** variáveis faltaram, a `fato_clima` usa a série diária e o frontend escreve a ressalva na tela. Análises horárias de irradiância precisam de janelas com mais de 3 meses |
+| 3 | Só **um** retrato da ANEEL arquivado em `historico_aneel/` ([§8.5](#85-retratos-datados--historico_aneel)) | `--mudancas-de-fase` já compara dois retratos, mas ainda não há série histórica: a transição `Construção → Operação` como evento real datado só existirá depois de execuções periódicas |
+| 4 | Os 101 testes ([§11](#11-testes-automatizados)) não detectam mudança de contrato nas APIs públicas | Se a ANEEL renomear uma coluna ou a NASA mudar o formato, a suíte continua verde: ela testa o nosso código contra o formato **conhecido** |
 
 ---
 
-*Documento gerado em 17/09/2026 a partir do código e das execuções reais da fase de ingestão.*
+*Documento gerado em 17/09/2026 a partir do código e das execuções reais da fase de ingestão. Revisado em 06/10/2026: testes automatizados (§11) e situação atual das limitações.*

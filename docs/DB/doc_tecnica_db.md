@@ -26,7 +26,7 @@
 13. [Consultas por endpoint da API](#13-consultas-por-endpoint-da-api)
 14. [Diferenças em relação ao DDL do system design](#14-diferenças-em-relação-ao-ddl-do-system-design)
 15. [Testes automatizados](#15-testes-automatizados)
-16. [Limitações e próximos passos](#16-limitações-e-próximos-passos)
+16. [Limitações conhecidas](#16-limitações-conhecidas)
 
 ---
 
@@ -58,6 +58,7 @@ DB/
 ├── esquema.py            # fonte única: tabelas, colunas, tipos, chaves, índices e views
 ├── criar_banco.py        # cria o solarwatch.duckdb a partir da camada curated
 ├── mer.py                # desenha o MER em PNG a partir de esquema.py
+├── tests/                # 25 testes: esquema, DDL, restrições, views e build-then-swap
 ├── mer_solarwatch.png    # diagrama gerado (versionado)
 └── solarwatch.duckdb     # banco gerado (NÃO versionado — está no .gitignore)
 ```
@@ -408,7 +409,7 @@ Melhor de 5 execuções, no banco completo, em máquina local:
 
 O orçamento do system design é de **50 ms (p50) por endpoint crítico** (§2.2). As consultas por usina ficam com duas ordens de grandeza de folga. Já as **agregações que varrem a base inteira** (31–44 ms) ficam no limite do orçamento em uma máquina local, e no free tier do Render, com CPU compartilhada, devem ficar acima dele.
 
-Encaminhamento sugerido: restringir a janela padrão de `/geracao/nacional`, ou materializar a agregação diária como tabela em vez de view (o volume é pequeno). Isso está na [§16](#16-limitações-e-próximos-passos).
+Encaminhamento sugerido: restringir a janela padrão de `/geracao/nacional`, ou materializar a agregação diária como tabela em vez de view (o volume é pequeno). Isso está na [§16](#16-limitações-conhecidas).
 
 ---
 
@@ -521,19 +522,19 @@ Mais o **build-then-swap** ([§10](#10-processo-de-carga-criar_bancopy)): com um
 
 ---
 
-## 16. Limitações e próximos passos
+## 16. Limitações conhecidas
 
-| # | Limitação | Impacto | Próximo passo |
-|---|---|---|---|
-| 1 | A criação do banco não faz parte da `ETL.pipeline` | É preciso lembrar de rodar `python -m DB.criar_banco` depois do ETL | Adicionar uma etapa `load` na pipeline (`--etapas raw clean curated load`) |
-| 2 | Agregações que varrem a base inteira levam 31–44 ms | No free tier, acima do orçamento de 50 ms | Materializar a agregação diária como tabela, ou limitar a janela padrão do endpoint nacional |
-| 3 | Banco fora do Git | O deploy precisa gerar o arquivo | Gerar no build do Render, ou versionar via Git LFS se for preciso o arquivo pronto |
-| 4 | ~~Sem testes automatizados do banco~~ **Resolvido:** 25 testes em `DB/tests` ([§15](#15-testes-automatizados)) — coerência da especificação, DDL, PK/FK/NOT NULL impostas pelo DuckDB, as três views conferidas à mão e o *build-then-swap* | Resta: o esquema é testado contra uma curated de brinquedo, não contra a real | A carga real já é verificada pela `validacao` do ETL antes de gravar |
-| 5 | Sem histórico: cada carga substitui tudo | Não dá para comparar versões do dado | Se necessário, gravar `data_carga` nas tabelas ou guardar bancos datados |
-| 6 | Metadados de proveniência não ficam no banco | O banco não sabe de qual coleta ele veio | Tabela `meta_carga` com data da carga, partição raw de origem e contagens |
-| 7 | 83 unidades sem potência por vínculo pendente e 10 sem clima | Endpoints devolvem campos nulos para elas | Melhorar o vínculo no ETL ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas-e-próximos-passos)) |
-| 8 | Outras 63 unidades (`tipo_unidade = 'pequenas_usinas'`) nunca terão cadastro | São somatórios estaduais de MMGD, não usinas | Nada a corrigir: filtrar por `tipo_unidade` ([§6.1](#61-dim_usina--308-linhas)) |
+| # | Limitação | Impacto |
+|---|---|---|
+| 1 | A criação do banco não faz parte da `ETL.pipeline` | É preciso rodar `python -m DB.criar_banco` depois do ETL; esquecer deixa o banco (e a API) numa versão anterior do dado |
+| 2 | Agregações que varrem a base inteira levam 31–44 ms ([§11](#11-desempenho-medido)) | Acima do orçamento de 50 ms do design para o free tier. As views não são materializadas |
+| 3 | Banco fora do Git (46 MB, gitignorado) | O deploy precisa gerar o arquivo a partir da curated |
+| 4 | Sem histórico: cada carga substitui o banco inteiro | Não dá para comparar versões do dado nem voltar a uma carga anterior |
+| 5 | Metadados de proveniência não ficam no banco | O arquivo não registra de qual coleta ou partição raw ele veio |
+| 6 | 149 unidades sem potência publicada por vínculo ONS × ANEEL parcial (66 `inconsistente` + 83 `sem_vinculo`) e 10 sem clima | Endpoints devolvem campos nulos para elas ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas)) |
+| 7 | Outras 63 unidades (`tipo_unidade = 'pequenas_usinas'`) nunca terão cadastro | São somatórios estaduais de MMGD, não usinas; separáveis por `tipo_unidade` ([§6.1](#61-dim_usina--308-linhas)) |
+| 8 | Os 25 testes ([§15](#15-testes-automatizados)) rodam sobre uma curated de brinquedo | Eles provam que o esquema impõe PK, FK e NOT NULL e que as views calculam o que dizem, não que a carga real está correta — isso é a `validacao` do ETL, que roda antes de gravar |
 
 ---
 
-*Documento gerado em 19/09/2026 a partir do código de `DB/` e do banco criado com a camada curated de 18/09/2026.*
+*Documento gerado em 19/09/2026 a partir do código de `DB/` e do banco criado com a camada curated de 18/09/2026. Revisado em 06/10/2026: testes automatizados (§15) e situação atual das limitações.*
