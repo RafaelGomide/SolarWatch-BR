@@ -24,7 +24,8 @@
 11. [Modelos salvos (`ML/modelos/`)](#11-modelos-salvos-mlmodelos)
 12. [Como usar um modelo salvo](#12-como-usar-um-modelo-salvo)
 13. [Premissas e riscos declarados](#13-premissas-e-riscos-declarados)
-14. [Limitações e próximos passos](#14-limitações-e-próximos-passos)
+14. [Testes automatizados](#14-testes-automatizados)
+15. [Limitações e próximos passos](#15-limitações-e-próximos-passos)
 
 ---
 
@@ -117,7 +118,7 @@ Depois:
 | `solar` | 1.896 h | 01/07 → 17/09/2026 | 12.632 MWh/h | **26,6%** | Ciclo diário forte; zero à noite |
 | `eolica` | 1.896 h | 01/07 → 17/09/2026 | 14.938 MWh/h | 0% | Ciclo diário mais fraco, mais ruído |
 
-79 dias de histórico são **pouco** para séries temporais: não há ciclo anual, e a sazonalidade semanal é frágil. Está registrado em [§14](#14-limitações-e-próximos-passos).
+79 dias de histórico são **pouco** para séries temporais: não há ciclo anual, e a sazonalidade semanal é frágil. Está registrado em [§15](#15-limitações-e-próximos-passos).
 
 ---
 
@@ -291,7 +292,7 @@ Duas conclusões:
 
 > A importância foi medida **dentro da amostra de treino**, então serve para entender o modelo, não como evidência de desempenho. A comparação honesta de desempenho é o backtesting.
 
-Esse resultado motiva o item 1 da [§14](#14-limitações-e-próximos-passos): usar clima **horário e por usina** deve mudar bastante o quadro da solar.
+Esse resultado motiva o item 1 da [§15](#15-limitações-e-próximos-passos): usar clima **horário e por usina** deve mudar bastante o quadro da solar.
 
 ---
 
@@ -358,7 +359,26 @@ Testado: o modelo carrega, reconhece as 27 features e devolve as 24 horas. Para 
 
 ---
 
-## 14. Limitações e próximos passos
+## 14. Testes automatizados
+
+```bash
+pytest ML/series_temporais/tests -q      # 32 testes, ~13 s
+```
+
+O risco número um aqui é **vazamento temporal**: uma feature que, na hora de prever, usa um valor que ainda não existia. Quando isso acontece o erro de backtesting fica ótimo, o de produção fica péssimo, e nada no código reclama. Por isso a maior parte dos testes verifica *fronteiras de tempo*, não números de acurácia:
+
+- **defasagem menor que o horizonte é recusada** com `ValueError` (a trava da [§5.1](#51-garantia-anti-vazamento)), e um teste cobra a invariante na própria configuração: `min(LAGS_H) >= HORIZONTE_H`;
+- **o lag traz exatamente o valor de 24 h antes**, comparado elemento a elemento com a série original deslocada;
+- **a média móvel é deslocada do horizonte** — o valor esperado é recalculado à mão a partir da janela correta, então um `shift` trocado aparece;
+- **`origens()` nunca deixa o treino alcançar o teste**: as janelas emendam de 24 em 24 horas, terminam no fim da série, respeitam o mínimo de treino e uma série curta devolve **menos janelas** em vez de treinar com 3 dias.
+
+A série de teste é uma senoide diária limpa, previsível de propósito: sem ruído, `naive_sazonal` acerta com RMSE zero — o que torna qualquer desvio um bug, não ruído. Com ruído, o teste cobra que o Gradient Boosting **bata o baseline**, que nunca preveja geração negativa e que devolva uma previsão por hora do horizonte.
+
+As métricas têm testes próprios porque é onde o número engana: o **MAPE ignora as horas de geração zero** (metade dos pontos do caso de teste, e a `cobertura_mape_smape_%` reporta isso), o piso é relativo à média da série, o `nrmse_%` usa **todos** os pontos, e o sinal de `vies` é fixado — positivo significa que o modelo previu **menos** que o observado. Um modelo que falha numa janela sai do painel sem derrubar a comparação dos outros, e isso também é testado.
+
+---
+
+## 15. Limitações e próximos passos
 
 | # | Limitação | Impacto | Próximo passo |
 |---|---|---|---|
@@ -369,7 +389,7 @@ Testado: o modelo carrega, reconhece as 27 features e devolve as 24 horas. Para 
 | 5 | Prophet não avaliado | O escopo citava "SARIMA **ou** Prophet" | O SARIMA cobre o papel de modelo estatístico interpretável. Prophet acrescentaria feriados e mudança de tendência, ao custo de mais uma dependência pesada |
 | 6 | Só horizonte de 24 h | A API pode querer 48 h ou 7 dias | O código é parametrizado (`--horizonte`); basta revalidar, lembrando que as defasagens mínimas acompanham o horizonte |
 | 7 | Modelos por fonte, não por usina | O endpoint `/usinas/{id}/previsao` precisa de previsão por usina | `--series usina` já funciona; falta rodar para todas as unidades relevantes e decidir entre um modelo por usina ou um modelo global com `usina_id` como feature |
-| 8 | Sem testes automatizados | Uma mudança nas features pode reintroduzir vazamento | `pytest` com os quatro testes da [§5.1](#51-garantia-anti-vazamento) e um teste de que `origens()` nunca gera treino sobrepondo teste |
+| 8 | ~~Sem testes automatizados~~ **Resolvido:** 32 testes em `ML/series_temporais/tests` ([§14](#14-testes-automatizados)) — as garantias anti-vazamento da [§5.1](#51-garantia-anti-vazamento), `origens()` sem sobreposição, as métricas e os baselines | Resta: `dados.py` (leitura do banco) e `treinar.py` não têm teste | Dependem do banco; ficariam num teste de integração com DuckDB de brinquedo |
 | 9 | Sem monitoramento de deriva | O modelo envelhece silenciosamente | Recalcular o RMSE das últimas janelas a cada atualização de dado e comparar com o valor registrado nos metadados |
 
 ---

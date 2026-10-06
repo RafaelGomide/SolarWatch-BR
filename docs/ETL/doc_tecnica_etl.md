@@ -85,11 +85,14 @@ ETL/
 │   ├── dim_usina.py   # dimensão + vínculo ONS × ANEEL + ponte
 │   └── fatos.py       # fato_geracao, fato_clima, fato_manutencao
 ├── validacao.py       # PK, FK, obrigatórias e faixas antes de gravar
-└── tests/             # 91 testes das regras de limpeza, vínculo e validação (§11)
+└── tests/              # 158 testes das regras e da pipeline inteira (§11)
     ├── conftest.py
+    ├── dados_brinquedo.py   # cadastro sintético do teste de integração
     ├── test_utils.py
     ├── test_dim_usina.py
-    └── test_validacao.py
+    ├── test_validacao.py
+    ├── test_raw.py
+    └── test_integracao.py   # raw -> clean -> curated
 ```
 
 Cada módulo de clean expõe uma função `limpar(caminho) -> DataFrame`, e cada módulo de curated expõe funções puras que recebem DataFrames e devolvem DataFrames. **Nenhum módulo grava arquivo por conta própria**: quem grava é o `pipeline.py`. Isso é o que deixa as funções testáveis isoladamente — e a suíte de `tests/` ([§11](#11-testes-automatizados)) só existe nessa forma por causa disso.
@@ -108,7 +111,7 @@ python -m ETL.pipeline --etapas clean curated    # pula a etapa raw
 python -m ETL.pipeline --etapas curated          # só remonta o modelo estrela a partir do clean (~20 s)
 python -m ETL.pipeline --data-coleta 2026-09-18  # reprocessa uma coleta específica
 
-pytest ETL/tests -q                              # 91 testes das regras, sem ler dados/ (~1 s)
+pytest ETL/tests -q                              # 158 testes, sem ler dados/ (~9 s)
 ```
 
 | Argumento | Efeito |
@@ -591,13 +594,15 @@ Os nulos permitidos por desenho (como `energia_mwh` com flag `faltante`) não en
 
 Os relatórios são impressos quando `VERBOSE_TOOLKIT = True` (`config.py`).
 
+As **12 funções do toolkit que o projeto usa** (estas quatro, mais as de sobrevivência e as de persistência de modelo) têm testes próprios em `ds_toolkit/tests/test_toolkit.py` — **47 testes**. O toolkit tem ~60 funções de uso geral; testar as que ninguém chama daria cobertura e não daria garantia, enquanto uma mudança de comportamento em `converter_tipos` ou `mesclar_seguro` muda o ETL inteiro. Um desses testes documenta um detalhe que afeta o vínculo por nome: `padronizar_texto` com `remover_pontuacao` **remove** a pontuação em vez de trocá-la por espaço, então `caetite-2` vira `caetite2` e não casa com `caetite 2`.
+
 ---
 
 ## 11. Testes automatizados
 
 ```bash
-pytest ETL/tests -q      # 91 testes, ~1 s
-pytest -q                # suíte do projeto (ingestão, ETL, simulação, backend): 238
+pytest ETL/tests -q      # 158 testes, ~9 s
+pytest -q                # suíte do projeto inteira: 549
 ```
 
 **Nenhum teste lê `dados/`.** Cada caso constrói em memória a menor tabela que exibe a regra — uma série de cinco horas com um buraco de três, uma `dim_usina` de duas linhas — ou escreve Parquets de brinquedo em `tmp_path`. Isso é o que permite testar o que o dado real não oferece sob demanda: um buraco de exatamente 4 horas, uma coordenada no meridiano de Greenwich, uma unidade que desapareceu do ONS entre duas execuções.
@@ -609,6 +614,8 @@ O `conftest.py` desliga os relatórios do `ds_toolkit` (`VERBOSE_TOOLKIT = False
 | `test_utils.py` | `interpolar_gaps_curtos`, `completar_grade`, `base_ceg`, `listar_faltantes`, `flag_qualidade`, `ler_parquet` | 35 |
 | `test_dim_usina.py` | `_nucleo` e `_ids_estaveis` | 19 |
 | `test_validacao.py` | PK, obrigatórias, faixas, integridade referencial e o relatório de erros | 37 |
+| `test_raw.py` | partição por data de coleta, idempotência e `localizar` | 14 |
+| `test_integracao.py` | `raw → clean → curated` sobre um cadastro de brinquedo, e o `_vincular` em isolamento | 53 |
 
 ### 11.1 O que cada grupo protege
 
@@ -624,17 +631,76 @@ Os extremos das séries sintéticas estão sobre a reta `y = 10x`, então o valo
 
 **`_ids_estaveis`** ([§8.2.5](#825-ids-estáveis)) — a promessa de que `usina_id` não muda entre execuções, testada contra uma `dim_usina.parquet` anterior escrita em `tmp_path`. Os IDs seguem a **chave**, não a posição (a dim é reordenada por fonte/região/nome antes de receber o ID); unidades novas recebem `max + 1`; e o ID de uma unidade que saiu do ONS **não é reciclado** — reciclá-lo faria uma usina nova herdar o histórico da antiga em qualquer coisa que tenha guardado o número: gráfico salvo, modelo treinado, link compartilhado.
 
+**`raw`** ([§5](#5-raw-layer-rawpy)) — a camada que o projeto promete **imutável**: a partição é a data de modificação do arquivo (a da coleta, não a de hoje), a pasta mensal do ONS usa a do arquivo gravado por último, reparticionar não recopia (compara tamanho e `mtime` em nanossegundos), um arquivo alterado na origem é recopiado, e uma fonte ausente só avisa — rodar o ETL sem ter ingerido a NASA não derruba as outras três. Em `localizar`, o clean pega a partição mais recente **que contém aquela fonte**, e uma partição com a pasta do ONS vazia não mascara a boa.
+
 **`validacao`** ([§9](#9-validação-validacaopy)) — um conjunto curated mínimo e válido (duas usinas, dois fatos de cada) é sabotado uma regra por vez. Cada violação é verificada pela mensagem, não só pela exceção: PK duplicada na dimensão e na PK **composta** do fato horário (repetir o `usina_id` em horas diferentes é o normal e tem que passar), nulo em cada obrigatória, cada faixa estourada por cima e por baixo, e fato órfão em cada uma das três fatos.
 
 Dois grupos registram o que **não** é erro, que é a parte fácil de quebrar sem perceber: `energia_mwh` nula com flag `faltante` é dado ausente declarado (o resultado normal de um gap longo demais), `potencia_mw` nula é o vínculo inconsistente se recusando a publicar número, as bordas das faixas são fechadas (lat `-34,0` e `5,5` passam) e uma usina sem fato de clima não é violação — a integridade referencial vale só na direção fato → dimensão.
 
 Por fim, dois testes sobre o **relatório**: que todos os problemas saem numa lista só (não é preciso rodar a pipeline quatro vezes para descobrir quatro erros) e que a contagem aparece na mensagem — saber que são 3 linhas e não 3.000 muda o diagnóstico. Um deles documenta a cascata: sobrescrever um `usina_id` na dimensão produz a PK duplicada **e** os fatos daquela usina virando órfãos, e ver os quatro sintomas juntos aponta para a causa única.
 
-### 11.2 O que não é testado
+### 11.2 Integração: `raw → clean → curated`
 
-- **O vínculo ONS × ANEEL ponta a ponta.** `_nucleo` é testado isoladamente; `_vincular` (a ordem por especificidade, a remoção de palavras do fim, a exclusividade das usinas já usadas) exigiria um cadastro de brinquedo grande o bastante para ser representativo. A verificação que vale hoje é a empírica, contra a geração medida: `razao_pico_potencia` ([§8.2.4](#824-verificação-do-vínculo-contra-a-geração-medida)).
-- **A pipeline ponta a ponta.** Não há teste que rode `raw → clean → curated` com um dataset de brinquedo. Hoje a garantia é a execução real, que valida a curated antes de gravar.
-- **O vínculo usina → ponto de clima** (`haversine_km` e a escolha do ponto mais próximo), coberto indiretamente pelos testes de `gerar_locais` na ingestão.
+Os testes unitários verificam cada regra isolada. Este verifica o que só aparece quando elas se compõem — e é o único lugar onde `_vincular`, a `ponte` e as três fatos são exercitados juntos.
+
+`dados_brinquedo.py` monta um recorte mínimo do mundo real: **5 unidades do ONS** (uma usina individual, dois conjuntos, um agregado de pequenas usinas e uma hidrelétrica), **8 usinas da ANEEL**, **2 pontos da NASA** e **5 eventos simulados**. Os números são escolhidos para serem verificáveis à mão: 2 × 30 MW vinculados com pico de 45 MWh dão razão 0,75 (`consistente`); 10 MW com pico de 30 MWh dão 3,0 (`inconsistente`).
+
+A pipeline roda **uma vez** por módulo, com as pastas de `config.py` redirecionadas para `tmp_path` em cada módulo que as importou (`raw.BRUTO`, `pipeline.CLEAN`, `pipeline.CURATED`, `pipeline.ARQUIVO_SIMULADO`, `dim_usina.CURATED`). Nada do projeto é lido ou escrito.
+
+**A sujeira plantada no bruto é rastreada até o modelo estrela.** Cada caso que a pipeline trata aparece uma vez na entrada e é cobrado na saída:
+
+| Plantado no bruto | Esperado na saída |
+|---|---|
+| Linha duplicada (mesma unidade e instante, valor antigo) | descartada; o valor antigo não existe em lugar nenhum |
+| Hora ausente na série | recriada pela grade e **interpolada** (gap de 1 h) |
+| 5 horas nulas consecutivas | `flag_qualidade = faltante`, `energia_mwh` nula até a fato |
+| Geração de −1,5 MWh (consumo auxiliar) | zerada com `negativo_zerado`; a faixa `energia_mwh ≥ 0` passa |
+| Unidade renomeada no meio do período | nome canônico = o último (`UFV BOM SOL I`) |
+| Unidade sem `id_ons` | `chave_unidade = PQU\|PQU MMAM MMGD\|AM` |
+| `"30.000,00"` kW | `potencia_outorgada_mw = 30,0` |
+| Coordenada `(0, 0)` e data `1900-01-03` | nulas, com `flag_coordenada` e `flag_data_operacao` |
+| `"Caetité - BA, Igaporã - BA"` | `municipio = Caetité`, `uf_municipio = BA` |
+| Irradiância horária toda em `-999` | nula, com `medidas_faltantes = irradiancia_wh_m2` |
+| Dia ausente na série diária | interpolado entre os vizinhos (5,2 e 5,6 → **5,4**) |
+| Último dia sem irradiância (latência) | **não** extrapolado: fica nulo com `faltante` |
+
+**O vínculo é cobrado nos quatro resultados possíveis**, com o ONS trazendo `...-0.01` e a ANEEL `...-0.1` para a mesma usina:
+
+| Unidade | Método | Qualidade | Potência publicada |
+|---|---|---|---|
+| `UFVA` (usina individual) | `ceg` | `exata` | 30,0 MW |
+| `CJEOL` (conjunto, 2 de 3 membros elegíveis) | `nome` | `consistente` (razão 0,75) | 60,0 MW |
+| `CJINC` (conjunto, vínculo parcial) | `nome` | `inconsistente` (razão 3,0) | nula, auditável em `potencia_aneel_vinculada_mw` |
+| `PQU` (agregado estadual) | `sem_vinculo` | `sem_vinculo` | nula |
+
+A terceira usina do conjunto está em **Construção** e por isso não entra (`n_usinas_aneel = 2`); a usina de 0,5 MW fica fora pela potência mínima; e a hidrelétrica atravessa o clean mas não entra na dimensão — o recorte solar/eólico é decisão da curated, não da limpeza.
+
+Nas fatos, o que o teste prende é a **composição**: `fato_geracao` tem exatamente uma linha por unidade × hora com as quatro flags presentes; `fato_clima` liga cada usina ao ponto NASA mais próximo pela haversine (e a unidade sem coordenada, no Amazonas, onde não há ponto na UF nem no subsistema, fica **sem** clima — o que a validação aceita); `fato_manutencao` herda o primeiro evento entre os membros do conjunto, com o relógio começando na operação mais antiga (`2018-07-15 − 2015-03-01`), e ignora a usina simulada que não está na ponte.
+
+Dois testes fecham o ciclo da pipeline:
+
+- **IDs estáveis ponta a ponta** — reprocessar a curated sobre o mesmo clean devolve exatamente os mesmos `usina_id`, agora lendo o `dim_usina.parquet` que a própria execução anterior gravou ([§8.2.5](#825-ids-estáveis)).
+- **A validação barra a gravação** — com uma geração negativa injetada no clean, `etapa_curated` levanta e a pasta de saída fica **vazia**. É o contrato da camada: é melhor não publicar do que publicar errado.
+
+#### 11.2.1 `_vincular` em isolamento
+
+O cadastro de brinquedo cobre o caminho normal; os casos de borda ficam em testes diretos, com duas ou três usinas cada, porque exigem combinações que não cabem no mesmo conjunto:
+
+- **Especificidade** — dois conjuntos cujos núcleos casariam a mesma usina (`santa eugenia` e `santa eugenia norte`): o mais longo escolhe primeiro. Sem a ordenação, o conjunto genérico capturaria as usinas do específico e o específico ficaria sem membros.
+- **Exclusividade** — dois conjuntos com o mesmo núcleo disputando uma usina: ela entra em um só.
+- **Fallback** — `caetite 123` não existe no cadastro, `caetite` existe: o núcleo perde palavras do fim até casar, e `nucleo_usado` registra qual casou.
+- **Fronteira de palavra** — `lapa` não casa `lapao`.
+- **Núcleo curto** — abaixo de 4 caracteres não vincula, em vez de casar com qualquer usina da UF.
+- **Elegibilidade** — fase diferente de `Operação`, potência abaixo de 1 MW, outra UF e outra fonte são recusadas uma a uma (parametrizado).
+- **CEG em qualquer fase** — a exceção deliberada: uma usina que já gera no ONS e ainda consta como `Construção` **é** vinculada por CEG.
+- **Ponte vazia com as colunas certas** — a curated faz `groupby` no resultado; sem as colunas, um cadastro sem vínculo nenhum derrubaria a pipeline em vez de produzir uma dimensão sem potência.
+
+### 11.3 O que não é testado
+
+- **A qualidade do vínculo com os nomes reais.** O teste de integração prova que a *mecânica* do `_vincular` está correta; que ela acerte os 66 conjuntos inconsistentes do cadastro real é outra pergunta, e a resposta é empírica: `razao_pico_potencia` contra a geração medida ([§8.2.4](#824-verificação-do-vínculo-contra-a-geração-medida)). Um cadastro de brinquedo não pode decidir isso — se pudesse, o problema não existiria.
+- **O desempenho.** O conjunto de brinquedo tem 360 linhas de geração; a execução real tem 1,3 milhão. Nada na suíte detecta uma regressão que faça o clean do ONS passar de 40 s para 10 minutos.
+- **O contrato das fontes.** Se a ANEEL renomear uma coluna, o teste continua verde: ele usa o formato **conhecido** da API ([ingestão §11.2](../ingestao/doc_tecnica_ingestao.md#112-o-que-não-é-testado)).
+- **`haversine_km` isoladamente.** A escolha do ponto mais próximo é verificada pelo resultado na `fato_clima`, não pela distância em si.
 - **Cobertura medida.** Não há `pytest-cov`; a escolha dos casos é por risco, não por percentual.
 
 ---
@@ -762,7 +828,7 @@ GROUP BY ALL;
 | 5 | Agregados "Pequenas Usinas" (63) sem cadastro | Sem potência, localização nem manutenção — mas **32% da energia medida** | **Aceito por natureza:** são somatórios estaduais de MMGD, não usinas, e nenhum vínculo os resolveria ([§8.2.1](#821-a-decisão-de-grão)). Separáveis por `tipo_unidade`: filtro na API (`GET /usinas?tipo_unidade=`), no painel ("Tipo de unidade") e aviso próprio na página da unidade; os endpoints de estimativa respondem 404 dizendo que o grão é agregado, não que o vínculo falhou |
 | 6 | `fato_manutencao` herda o 1º evento de N usinas | Conjuntos grandes parecem "falhar antes" | Usar o arquivo simulado por usina para modelagem. Documentado |
 | 7 | Limpeza do ONS ~40 s (transformações com `groupby` + `lambda`) | Aceitável hoje; cresce com o histórico | Particionar o clean do ONS por mês e processar só as partições novas |
-| 8 | ~~Sem testes automatizados~~ **Resolvido:** 91 testes em `ETL/tests`, sem ler `dados/` ([§11](#11-testes-automatizados)) — `interpolar_gaps_curtos` (3 h interpola, 4 h não, e não pela metade), `completar_grade`, `base_ceg`, `_nucleo`, `_ids_estaveis` e as quatro regras da `validacao` | Resta: o `_vincular` e a pipeline ponta a ponta não têm teste ([§11.2](#112-o-que-não-é-testado)) | Um teste de integração com um cadastro de brinquedo, cobrindo `raw → clean → curated` |
+| 8 | ~~Sem testes automatizados~~ **Resolvido:** 158 testes em `ETL/tests`, sem ler `dados/` ([§11](#11-testes-automatizados)) — as regras de limpeza e validação em isolamento, mais um teste de integração `raw → clean → curated` sobre um cadastro de brinquedo que cobre o `_vincular`, a ponte, as três fatos, os IDs estáveis e a validação barrando a gravação ([§11.2](#112-integração-raw--clean--curated)) | Resta: nada detecta regressão de desempenho (brinquedo tem 360 linhas; o real, 1,3 mi) nem mudança de contrato nas fontes | Marcar um caso grande como `slow` para medir o clean do ONS, e um teste de integração com rede rodado à parte |
 | 9 | Carga no DuckDB ainda não implementada | O banco estático ainda não existe | Etapa `load` na pipeline: gerar `solarwatch.duckdb` a partir da curated, com *build-then-swap* |
 
 ---

@@ -385,9 +385,23 @@ O 503 traz no `detail` o motivo real (`FileNotFoundError: ...`), o que encurta o
 
 ## 13. Testes
 
-`pytest backend/tests -q` → **24 testes**, ~8 s. Rodam contra o banco real (read-only, sem efeito colateral) e pulam com mensagem explicativa se ele não existir.
+`pytest backend/tests -q` → **101 testes**, ~70 s, em três arquivos:
 
-| Grupo | O que cobre |
+| Arquivo | Escopo | Testes |
+|---|---|---|
+| `test_api.py` | contrato da API contra o banco real (read-only, sem efeito colateral); pula com mensagem explicativa se o banco não existir | 35 |
+| `test_unidades.py` | as peças que sustentam o contrato, em isolamento: cursor, Problem Details, rate limit, métricas, logs, janela de datas, configuração | 50 |
+| `test_modelos_ml.py` | registro de modelos e conexão com o banco — a degradação graciosa do §10.5, com modelos de mentira em `tmp_path` | 16 |
+
+**O que só o teste isolado alcança:** um cursor corrompido, um balde de tokens vazio, um pickle truncado, uma tabela pré-calculada sem a coluna de índice, 1.000 IPs diferentes para ver o descarte de baldes inativos. Nada disso é provocável pelo banco real, e é exatamente onde o código erra.
+
+Três achados dos testes de unidade:
+
+- **o cursor aceitava lixo.** `base64.urlsafe_b64decode` ignora o que vem depois do padding, então `MTI=qualquercoisa` decodificava para `12` em silêncio e a API paginava a partir de um id que ninguém pediu. O `decodificar` passou a exigir a **forma canônica** (o cursor tem de ser exatamente o que `codificar` produziria), e o teste do caso ficou;
+- **o log de acesso não vaza header.** Há um teste que manda `Authorization: Bearer segredo-123` e verifica que nem o valor nem o nome do header aparecem no JSON do log (§12.1);
+- **o balde repõe de forma contínua e não acumula além da capacidade** — uma hora de inatividade não dá 3.600 tokens de crédito.
+
+| Grupo do `test_api.py` | O que cobre |
 |---|---|
 | Sistema | `/health`, `/metrics`, `X-Request-ID`, OpenAPI com as rotas versionadas |
 | Usinas | limite, **cursor sem interseção entre páginas**, filtros, 404 em Problem Details |
@@ -460,7 +474,7 @@ O `skipif` consultava o registro de modelos no momento do import, quando o `life
 | Item | Design | Implementado | Motivo |
 |---|---|---|---|
 | Rate limiting | `slowapi` | Token bucket próprio | O `slowapi` é incompatível com esta versão do FastAPI e desativava o limite sem avisar ([§15.1](#151-o-rate-limit-do-slowapi-não-funcionava-silenciosamente)) |
-| `/usinas/{id}/previsao` | Previsão por usina | Rateio da previsão da fonte, declarado em `metodo` | O modelo foi treinado no agregado por fonte; um modelo por usina é trabalho futuro ([séries temporais §14](../ML/doc_tecnica_series_temporais.md#14-limitações-e-próximos-passos)) |
+| `/usinas/{id}/previsao` | Previsão por usina | Rateio da previsão da fonte, declarado em `metodo` | O modelo foi treinado no agregado por fonte; um modelo por usina é trabalho futuro ([séries temporais §15](../ML/doc_tecnica_series_temporais.md#15-limitações-e-próximos-passos)) |
 | Resposta de `/geracao` | Array puro | Objeto com metadados + `data` | Permite devolver `total_mwh`, cobertura e o nome da usina sem uma segunda chamada |
 | Resposta de `/sobrevivencia` | `horizonte_dias[]` + `probabilidade[]` | Lista de objetos + campos de contexto | Dois arrays paralelos são fáceis de desalinhar; e os campos `simulado`, `aviso` e `metodo_extrapolacao` precisavam existir |
 | Latência | 50 ms p50 | 11–170 ms conforme o endpoint | Volume real ficou 600× acima do estimado no design ([banco §14](../DB/doc_tecnica_db.md#14-diferenças-em-relação-ao-ddl-do-system-design)) |

@@ -24,8 +24,15 @@ def decodificar(cursor: str | None) -> int:
     if not cursor:
         return 0
     try:
-        return int(base64.urlsafe_b64decode(cursor.encode()).decode())
+        valor = int(base64.urlsafe_b64decode(cursor.encode()).decode())
     except (binascii.Error, ValueError, UnicodeDecodeError) as erro:
         raise HTTPException(
             CODIGO_VALIDACAO, f"cursor inválido: {cursor!r}"
         ) from erro
+    # O decodificador do base64 ignora lixo depois do padding: 'MTI=qualquercoisa'
+    # decodifica para 12 em silêncio. Exigir a forma canônica (o cursor tem de ser
+    # exatamente o que `codificar` produziria) recusa isso e qualquer cursor
+    # inventado à mão, em vez de paginar a partir de um id que ninguém pediu.
+    if codificar(valor) != cursor:
+        raise HTTPException(CODIGO_VALIDACAO, f"cursor inválido: {cursor!r}")
+    return valor

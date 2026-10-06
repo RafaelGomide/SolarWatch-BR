@@ -24,7 +24,8 @@
 12. [Como usar o modelo salvo](#12-como-usar-o-modelo-salvo)
 13. [Decisões metodológicas](#13-decisões-metodológicas)
 14. [Eventos recorrentes: Andersen-Gill e PWP](#14-eventos-recorrentes-andersen-gill-e-pwp)
-15. [Limitações e próximos passos](#15-limitações-e-próximos-passos)
+15. [Testes automatizados](#15-testes-automatizados)
+16. [Limitações e próximos passos](#16-limitações-e-próximos-passos)
 
 ---
 
@@ -624,7 +625,32 @@ Continuam de fora:
 
 ---
 
-## 15. Limitações e próximos passos
+## 15. Testes automatizados
+
+```bash
+pytest ML/analise_sobrevivencia/tests -q      # 85 testes, ~21 s
+```
+
+| Arquivo | Cobre | Testes |
+|---|---|---|
+| `test_dados_simulados.py` | o gerador: invariantes do esquema, determinismo por semente, flags das variantes e recuperação de $\beta$ | 29 |
+| `test_modelos.py` | limite de suporte, Cox estratificado, extrapolação Weibull, previsor e avaliação | 26 |
+| `test_recorrentes.py` | painel de contagem, MCF, Andersen-Gill, PWP, fragilidade gama e previsor de recorrência | 30 |
+
+**O caso do [§10](#10-o-bug-da-extrapolação-e-como-foi-resolvido) virou teste de regressão.** Três deles cercam o bug: o limite de suporte sempre tem `MINIMO_EM_RISCO` unidades sob observação; um evento isolado em 30 anos **não** estica o suporte do estrato (era exatamente o que acontecia); e uma usina mais antiga que o limite sai com `metodo_extrapolacao = "weibull"` e probabilidade **abaixo de 1,00** — o sintoma original era `P = 1,00` para a usina 12.
+
+**A conta da sobrevivência condicional é verificada contra a curva**, não contra uma expectativa: `p_sem_manutencao_6m` tem de ser exatamente `S(t0+0,5)/S(t0)` lido da função de sobrevivência do Cox. E um teste registra a direção que isso implica — com $\rho > 1$ (desgaste), a probabilidade condicional **cai** com a idade; ela subiria se o risco fosse decrescente, que não é o caso de manutenção corretiva de equipamento.
+
+**Nos recorrentes**, o que se protege é a aritmética do processo de contagem, onde o erro não levanta exceção: os episódios de uma usina são encadeados sem buraco (`t_fim` de um é `t_inicio` do próximo), o último é sempre censurado, a MCF é monótona e o conjunto de risco só encolhe. A MCF também é calculada **à mão** num painel de 3 usinas e 2 eventos, para fixar o denominador de Nelson-Aalen.
+
+Dois testes mediram coisas que valem como resultado:
+
+- **o erro padrão agrupado é maior que o ingênuo** em todas as covariáveis — é o preço, medido, de tratar 4.157 episódios como 4.157 observações independentes quando são 1.854 usinas. Com ele, o efeito de potência no Andersen-Gill fica em **p ≈ 0,06**: sinal e magnitude certos, significância no limite. Ignorar o agrupamento daria um p bonito e falso;
+- **a fragilidade posterior encolhe para 1** nas usinas sem evento, como manda o Bayes empírico, e correlaciona com a contagem observada ($r > 0,3$) — é o sinal de que `exposicao` está em eventos esperados pela MCF, não em anos.
+
+---
+
+## 16. Limitações e próximos passos
 
 | # | Limitação | Impacto | Próximo passo |
 |---|---|---|---|
@@ -637,7 +663,7 @@ Continuam de fora:
 | 5 | ~~Um evento por usina~~ **Resolvido:** Andersen-Gill e PWP sobre o painel de episódios ([§14](#14-eventos-recorrentes-andersen-gill-e-pwp)), servidos em `/usinas/{id}/recorrencia` e num card próprio | Resta: a fragilidade por usina não é exposta na API | Expor `frailty_posterior` como sinal de alerta ([§14.8](#148-o-que-entrou-no-produto-e-o-que-ficou-de-fora)) |
 | 6 | Sem intervalo na probabilidade | O card mostra um ponto | Bootstrap sobre os coeficientes do Cox para banda de confiança |
 | 7 | Extrapolação Weibull não validada | 21 usinas dependem dela, fora do suporte observado | Por definição não há dado para validar; sinalizar no frontend quando `metodo_extrapolacao = "weibull"` |
-| 8 | Sem testes automatizados | Regressões silenciosas | `pytest`: invariantes da carga, probabilidade em [0,1], monotonicidade em relação ao horizonte, e o caso do [§10](#10-o-bug-da-extrapolação-e-como-foi-resolvido) (usina antiga não pode dar 1,00) |
+| 8 | ~~Sem testes automatizados~~ **Resolvido:** 85 testes em `ML/analise_sobrevivencia/tests` ([§15](#15-testes-automatizados)) — invariantes, probabilidade em [0,1], monotonicidade no horizonte, a regressão do [§10](#10-o-bug-da-extrapolação-e-como-foi-resolvido) e a aritmética dos recorrentes | Resta: `treinar.py` e `treinar_recorrentes.py` (a orquestração) não têm teste; o que é testado são as funções que eles chamam | Um teste `slow` que rode o treino inteiro numa amostra e confira os artefatos gravados |
 | 9 | Sem covariáveis operacionais | O modelo só conhece cadastro | Quando houver mais histórico, incluir fator de capacidade, horas de operação e clima acumulado (vento/temperatura) como covariáveis |
 
 ---

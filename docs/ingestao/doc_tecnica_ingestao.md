@@ -777,8 +777,8 @@ O cadastro da ANEEL é **público por lei**, mas contém dados de **pessoas fís
 ## 11. Testes automatizados
 
 ```bash
-pytest ingestao/tests -q        # 93 testes, ~5 s
-pytest -q                       # com os 24 do backend: 117
+pytest ingestao/tests -q        # 101 testes, ~6 s
+pytest -q                       # a suíte do projeto inteira: 549
 ```
 
 **Nenhum teste toca a rede.** Todas as respostas HTTP são simuladas com [`responses`](https://github.com/getsentry/responses), que intercepta o `requests` na camada do adaptador: a sessão, os cabeçalhos, os parâmetros e o código de status são os reais, só o socket não existe. Isso permite testar coisas que a rede não oferece sob demanda — um `429`, um mês que ainda não foi publicado, o recurso da ANEEL mudando no meio da paginação.
@@ -793,6 +793,7 @@ O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de ret
 | `test_aneel.py` | paginação e retratos datados | 14 |
 | `test_gerar_locais.py` | seleção dos pontos de clima a partir do cadastro | 18 |
 | `test_orquestrador.py` | ordem das etapas, repasse de período e comportamento em falha | 11 |
+| `test_armazenamento.py` | escrita atômica da camada bruta (*build-then-swap*) | 8 |
 
 ### 11.1 O que cada grupo protege
 
@@ -800,7 +801,7 @@ O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de ret
 
 **`PADRAO_MENSAL`** ([§6.3](#63-descoberta-de-arquivos-_urls_disponiveis)) — é o teste de regressão do primeiro bug real do projeto: a versão inicial usava `rsplit("_", 2)` e quebrava com `ValueError` nos arquivos **anuais** do ONS, tentando converter `"USINA-2"` em ano. Há um caso explícito para `GERACAO_USINA-2_2015.parquet`, mais CSV, XLSX e `.parquet.tmp`, que também não podem casar.
 
-**`_janelas_anuais`** ([§7.2](#72-a-chamada)) — além dos casos diretos, uma propriedade: para qualquer período, as janelas emendam exatamente (o fim de uma é véspera do início da seguinte), nenhuma cruza o ano e as pontas batem com o período pedido. É o tipo de invariante que um exemplo isolado não garante.
+**`_janelas_anuais`** ([§7.2](#72-parâmetros-consultados)) — além dos casos diretos, uma propriedade: para qualquer período, as janelas emendam exatamente (o fim de uma é véspera do início da seguinte), nenhuma cruza o ano e as pontas batem com o período pedido. É o tipo de invariante que um exemplo isolado não garante.
 
 **Paginação da ANEEL** ([§8.3](#83-lógica-de-paginação-e-verificações-de-consistência)) — com `TAMANHO_PAGINA` reduzido para 2 via `monkeypatch`, dá para paginar de verdade sem simular 5.000 linhas. Os testes verificam o avanço do `offset`, o `sort=_id asc` (sem ele a paginação por offset repete ou pula linhas), o filtro `SigTipoGeracao` e as três formas de abortar: total mudando no meio da coleta, contagem final menor que a prometida e `success: false`. Em todos os casos de aborto, verifica-se também que **nada foi gravado** — um retrato pela metade não pode virar camada bruta.
 
@@ -808,7 +809,9 @@ O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de ret
 
 **Retratos da ANEEL** ([§8.5](#85-retratos-datados--historico_aneel)) — que a data vem do dado e não do relógio, que arquivar duas vezes não regrava (comparando o `mtime` em nanossegundos), que `retratos()` ignora arquivos estranhos na pasta e que `mudancas_de_fase` detecta tanto a transição `Construção → Operação` quanto a usina que entrou no cadastro.
 
-**Orquestrador** ([§3.2.1](#321-o-orquestrador--ingestaomainpy)) — `subprocess.run` é substituído por um dublê que registra o comando pedido, então os testes verificam a ordem, o repasse de `--inicio`/`--fim` só para quem aceita período, a parada na primeira falha (com as seguintes marcadas `pulada`) e o `--seguir`. Nenhum processo é criado.
+**Orquestrador** ([§3.2.1](#321-o-orquestrador--ingestao__main__py)) — `subprocess.run` é substituído por um dublê que registra o comando pedido, então os testes verificam a ordem, o repasse de `--inicio`/`--fim` só para quem aceita período, a parada na primeira falha (com as seguintes marcadas `pulada`) e o `--seguir`. Nenhum processo é criado.
+
+**`gravar_parquet`** ([§4.5](#45-formato-de-saída-parquet)) — a função por onde passa toda a gravação do projeto. O teste central simula uma falha de disco no meio da escrita (`to_parquet` levanta `OSError`) e verifica que o arquivo **anterior continua íntegro** — é a promessa do *build-then-swap*, e a razão de ninguém nunca ler um Parquet pela metade. Os demais cobrem a criação das pastas, o índice que não vai para o arquivo, a compressão declarada, a regravação e o caso do DataFrame vazio (um mês sem dado publicado não derruba a ingestão).
 
 **`gerar_locais`** ([§7.3](#73-escolha-dos-locais--locaiscsv)) — o formato numérico brasileiro (`"11.832,10"` → `11.8321` MW), os descartes (potência baixa, fase, coordenada fora do Brasil, outra fonte), o caso real das "Fótons de São George" (UF de MS com coordenada no Piauí) e o **determinismo** com potências empatadas: o teste gera o CSV cinco vezes e exige o mesmo ponto.
 
@@ -831,7 +834,7 @@ O `conftest.py` anula `time.sleep` para toda a suíte. Sem isso, um teste de ret
 | 5 | ~~NASA: vento/temperatura atrasam ~2 dias; irradiância horária ~3 meses, diária ~1 semana~~ | Janela recente sem parte das variáveis **Tratado:** o valor `-999` vira nulo com flag `faltante`, a coluna `medidas_faltantes` diz **quais** variáveis faltaram (as latências são diferentes por variável) e a `fato_clima` usa a série diária. A API expõe as duas colunas e o frontend escreve a ressalva na tela. Para análises horárias de irradiância, usar períodos com mais de 3 meses |
 | 6 | ~~ANEEL é um retrato único, sobrescrito~~ **Resolvido:** cada execução arquiva `historico_aneel/dados_aneel_bruto_AAAA-MM-DD.parquet`, com data lida de `DatGeracaoConjuntoDados`, e `--mudancas-de-fase` compara dois retratos ([§8.5](#85-retratos-datados--historico_aneel)) | Resta: só há um retrato arquivado, então ainda não há série histórica para a análise de sobrevivência usar | Rodar a ingestão periodicamente (o valor aparece com o tempo) |
 | 7 | ~~Sem testes automatizados~~ **Resolvido:** 93 testes em `ingestao/tests` com `pytest` + `responses`, sem rede ([§11](#11-testes-automatizados)) | Resta: mudança de contrato nas APIs públicas não é detectada | Um teste de integração com rede, rodado à parte e tolerante a indisponibilidade |
-| 8 | ~~Três comandos separados~~ **Resolvido:** `python -m ingestao` roda as etapas na ordem canônica, com `--fontes`, `--listar`, `--seguir` e resumo final ([§3.2.1](#321-o-orquestrador--ingestaomainpy)) | — | — |
+| 8 | ~~Três comandos separados~~ **Resolvido:** `python -m ingestao` roda as etapas na ordem canônica, com `--fontes`, `--listar`, `--seguir` e resumo final ([§3.2.1](#321-o-orquestrador--ingestao__main__py)) | — | — |
 
 ---
 

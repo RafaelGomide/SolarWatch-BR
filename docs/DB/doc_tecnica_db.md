@@ -25,7 +25,8 @@
 12. [Tamanho, memória e deploy](#12-tamanho-memória-e-deploy)
 13. [Consultas por endpoint da API](#13-consultas-por-endpoint-da-api)
 14. [Diferenças em relação ao DDL do system design](#14-diferenças-em-relação-ao-ddl-do-system-design)
-15. [Limitações e próximos passos](#15-limitações-e-próximos-passos)
+15. [Testes automatizados](#15-testes-automatizados)
+16. [Limitações e próximos passos](#16-limitações-e-próximos-passos)
 
 ---
 
@@ -407,7 +408,7 @@ Melhor de 5 execuções, no banco completo, em máquina local:
 
 O orçamento do system design é de **50 ms (p50) por endpoint crítico** (§2.2). As consultas por usina ficam com duas ordens de grandeza de folga. Já as **agregações que varrem a base inteira** (31–44 ms) ficam no limite do orçamento em uma máquina local, e no free tier do Render, com CPU compartilhada, devem ficar acima dele.
 
-Encaminhamento sugerido: restringir a janela padrão de `/geracao/nacional`, ou materializar a agregação diária como tabela em vez de view (o volume é pequeno). Isso está na [§15](#15-limitações-e-próximos-passos).
+Encaminhamento sugerido: restringir a janela padrão de `/geracao/nacional`, ou materializar a agregação diária como tabela em vez de view (o volume é pequeno). Isso está na [§16](#16-limitações-e-próximos-passos).
 
 ---
 
@@ -498,14 +499,36 @@ O último item merece atenção: o dimensionamento do system design (§3.3) part
 
 ---
 
-## 15. Limitações e próximos passos
+## 15. Testes automatizados
+
+```bash
+pytest DB/tests -q      # 25 testes, ~14 s
+```
+
+Nenhum teste toca `DB/solarwatch.duckdb`. A curated de brinquedo é gerada **da própria especificação** (`TABELAS`), com as colunas que importam sobrepostas — então os testes acompanham o esquema quando ele ganha uma coluna, em vez de quebrar.
+
+Quatro grupos:
+
+**1. Coerência da especificação** — toda PK é coluna obrigatória (PK nula seria linha sem identidade), toda FK aponta para a PK declarada da tabela de destino, todo índice referencia coluna existente, nenhuma coluna repetida, e toda tabela declara origem, grão e descrição (é de onde o MER e os logs saem).
+
+**2. DDL gerado** — `NOT NULL` só nas obrigatórias, PK composta onde o grão é composto, FK declarada, e o `SELECT` de carga com `CAST` de cada coluna **na ordem do DDL**.
+
+**3. As restrições valem no banco** — não basta o DDL dizer: os testes tentam inserir PK duplicada, nulo em coluna obrigatória e fato órfão, e cobram `ConstraintException` nos três casos. E verificam o contrário também: `energia_mwh` nula **é** aceita, porque hora sem medição é dado ausente declarado, não violação.
+
+**4. As views calculam o que dizem** — 48 horas a partir de 03:00Z viram **dois** dias cheios no fuso de Brasília (é o `AT TIME ZONE` da `vw_geracao_diaria`); uma hora marcada `faltante` reduz `horas_validas` de 24 para 23 e tira o dia do fator de capacidade; e `vw_fator_capacidade_diario` só devolve dia completo e usina com potência — 12 MWh em 1 MW instalado dão FC = 0,5, com o clima do dia ao lado.
+
+Mais o **build-then-swap** ([§10](#10-processo-de-carga-criar_bancopy)): com um arquivo da curated ausente, `criar()` levanta e o banco anterior continua servindo, byte a byte — a API nunca enxerga um banco pela metade. E o MER é desenhado em `tmp_path` com a verificação de que o layout tem exatamente as tabelas da especificação, nem uma a mais nem a menos.
+
+---
+
+## 16. Limitações e próximos passos
 
 | # | Limitação | Impacto | Próximo passo |
 |---|---|---|---|
 | 1 | A criação do banco não faz parte da `ETL.pipeline` | É preciso lembrar de rodar `python -m DB.criar_banco` depois do ETL | Adicionar uma etapa `load` na pipeline (`--etapas raw clean curated load`) |
 | 2 | Agregações que varrem a base inteira levam 31–44 ms | No free tier, acima do orçamento de 50 ms | Materializar a agregação diária como tabela, ou limitar a janela padrão do endpoint nacional |
 | 3 | Banco fora do Git | O deploy precisa gerar o arquivo | Gerar no build do Render, ou versionar via Git LFS se for preciso o arquivo pronto |
-| 4 | Sem testes automatizados do banco | Uma mudança no esquema pode quebrar a carga em silêncio | `pytest`: criar o banco em arquivo temporário, conferir contagens, PKs, FKs e o resultado das views |
+| 4 | ~~Sem testes automatizados do banco~~ **Resolvido:** 25 testes em `DB/tests` ([§15](#15-testes-automatizados)) — coerência da especificação, DDL, PK/FK/NOT NULL impostas pelo DuckDB, as três views conferidas à mão e o *build-then-swap* | Resta: o esquema é testado contra uma curated de brinquedo, não contra a real | A carga real já é verificada pela `validacao` do ETL antes de gravar |
 | 5 | Sem histórico: cada carga substitui tudo | Não dá para comparar versões do dado | Se necessário, gravar `data_carga` nas tabelas ou guardar bancos datados |
 | 6 | Metadados de proveniência não ficam no banco | O banco não sabe de qual coleta ele veio | Tabela `meta_carga` com data da carga, partição raw de origem e contagens |
 | 7 | 83 unidades sem potência por vínculo pendente e 10 sem clima | Endpoints devolvem campos nulos para elas | Melhorar o vínculo no ETL ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas-e-próximos-passos)) |
