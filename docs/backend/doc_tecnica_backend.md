@@ -174,7 +174,7 @@ O exemplo acima é justamente um agregado. `GET /usinas?tipo_unidade=conjunto` (
 - **Detalhe:** o mesmo da lista, mais cobertura da série e dados do vínculo.
 - **Geração:** série horária (`inicio`/`fim` opcionais), com `total_mwh`, `horas` e, em cada ponto, `flag_qualidade`. Horas sem medição **aparecem** com `energia_mwh: null` e flag `faltante` — o buraco fica visível em vez de sumir.
 - **Clima:** cada ponto traz `flag_qualidade` e `medidas_faltantes`, a lista das variáveis sem valor naquele dia. É o que permite ao cliente dizer "irradiância indisponível nos últimos 5 dias" em vez de desenhar uma lacuna sem explicação — a NASA publica vento e temperatura com ~2 dias de atraso e a irradiância diária com ~1 semana, então o fim da série tem parte das variáveis ausente por construção.
-- **Clima:** série diária do ponto NASA de referência, com `local_clima`, `distancia_km`, `metodo_vinculo_clima` e um `aviso` de que o clima não é da coordenada exata da usina. Usina sem ponto de referência (as 10 do subsistema Norte) recebe 404 explicando o motivo.
+- **Clima:** série diária do ponto NASA de referência, com `local_clima`, `distancia_km`, `metodo_vinculo_clima` e um `aviso` de que o clima não é da coordenada exata da usina. Desde a reingestão dos 19 pontos (06/10/2026) as 308 unidades têm clima — a mediana é de 65 km e 4 unidades ficam acima dos 300 km, marcadas `mais_proximo_distante`. O 404 para unidade sem ponto de referência continua implementado: ele volta a valer se um `locais.csv` futuro deixar alguma região descoberta.
 
 ### 6.3 `GET /geracao/nacional`
 

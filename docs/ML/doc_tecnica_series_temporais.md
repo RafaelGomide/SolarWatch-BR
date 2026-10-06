@@ -289,7 +289,9 @@ Importância por permutação (`GradientBoosting.importancias`), em % do total:
 Duas conclusões:
 
 - **Na eólica o clima ajuda:** o vento a 50 m sozinho responde por 11,2% da importância. É o efeito esperado de uma exógena física relevante.
-- **Na solar o clima é quase irrelevante (0,4%),** o que à primeira vista surpreende, já que irradiância explica geração solar. A explicação está na granularidade: a irradiância é **diária** e vem da média de 10 pontos da NASA, então ela é idêntica nas 24 horas do dia e quase não varia entre dias nublados e claros quando se olha o país inteiro. A hora do dia (`hora_cos`) e a geração de ontem já carregam quase toda a informação.
+- **Na solar o clima é quase irrelevante (0,4%),** o que à primeira vista surpreende, já que irradiância explica geração solar. A explicação está na granularidade: a irradiância é **diária** e vem da média dos pontos da NASA, então ela é idêntica nas 24 horas do dia e quase não varia entre dias nublados e claros quando se olha o país inteiro. A hora do dia (`hora_cos`) e a geração de ontem já carregam quase toda a informação.
+
+> Esta medição é do modelo treinado com os **10 pontos** de clima antigos. Desde 06/10/2026 o banco tem 19 pontos, com a distância mediana usina → ponto caindo de 100 km para 65 km; o número só muda depois de retreinar (`python -m ML.series_temporais.treinar`).
 
 > A importância foi medida **dentro da amostra de treino**, então serve para entender o modelo, não como evidência de desempenho. A comparação honesta de desempenho é o backtesting.
 
@@ -383,7 +385,7 @@ As métricas têm testes próprios porque é onde o número engana: o **MAPE ign
 
 | # | Limitação | Impacto |
 |---|---|---|
-| 1 | Clima diário, médio de 10 pontos regionais | Na solar o clima fica quase inútil: 0,4% da importância ([§10](#10-importância-das-features)). É a limitação com maior potencial de ganho, e depende da limitação 2 do [ETL](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas) |
+| 1 | Clima **diário** e regional (19 pontos desde 06/10/2026, mediana de 65 km) | Na solar o clima ficou quase inútil: 0,4% da importância ([§10](#10-importância-das-features)) — medido com os 10 pontos anteriores. A granularidade diária é o limite de fundo: a irradiância é idêntica nas 24 horas do dia. Os modelos em produção ainda são os treinados com o clima antigo |
 | 2 | Histórico de 79 dias | Sem sazonalidade anual; o modelo pode degradar fora da janela observada e a sazonalidade semanal é frágil |
 | 3 | Hiperparâmetros fixos | O Gradient Boosting não foi otimizado — qualquer otimização precisaria de validação temporal (`TimeSeriesSplit`), nunca `KFold` comum |
 | 4 | Sem intervalo de previsão | A API devolve só o valor pontual |

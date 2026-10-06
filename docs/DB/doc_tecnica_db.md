@@ -44,8 +44,8 @@ Por que DuckDB (§7 do system design): é um banco embarcado em um único arquiv
 |---|---|
 | Arquivo | `DB/solarwatch.duckdb` (~46 MB) |
 | Tabelas | 4 do modelo estrela + 1 ponte de auditoria |
-| Linhas | ~601 mil no total |
-| Período dos fatos | 01/07/2026 → 18/09/2026 |
+| Linhas | ~605 mil no total |
+| Período dos fatos | geração 01/07/2026 → 17/09/2026; clima 01/07/2026 → 30/09/2026 |
 | Escopo | Geração **solar e eólica** (o ETL mantém as demais fontes só na camada clean) |
 
 ---
@@ -227,7 +227,7 @@ CREATE TABLE fato_geracao (
 - `energia_mwh` **aceita nulo**, sempre acompanhado de `flag_qualidade = 'faltante'` (96 horas). A linha permanece na tabela para o buraco ficar visível.
 - `fonte` e `regiao` são desnormalizadas da dimensão, o que evita um join nas agregações nacionais.
 
-### 6.3 `fato_clima` — 23.840 linhas
+### 6.3 `fato_clima` — 28.336 linhas
 
 ```sql
 CREATE TABLE fato_clima (
@@ -249,16 +249,17 @@ CREATE TABLE fato_clima (
 );
 ```
 
-O clima vem de **pontos da NASA POWER**, não da coordenada exata de cada usina. `local_clima`, `distancia_km` e `metodo_vinculo_clima` deixam essa aproximação explícita. Dez unidades do subsistema Norte ficam sem clima, porque não há ponto de coleta lá.
+O clima vem de **19 pontos da NASA POWER**, não da coordenada exata de cada usina. `local_clima`, `distancia_km` e `metodo_vinculo_clima` deixam essa aproximação explícita: a mediana é de 65 km nas 162 unidades com coordenada, e as 146 sem coordenada recebem o ponto da própria UF (124) ou do subsistema (22). **Todas as 308 unidades têm clima** — com os 10 pontos escolhidos à mão, as 10 do subsistema Norte ficavam de fora.
 
-`medidas_faltantes` cobre a outra aproximação, a temporal: a NASA publica cada variável com um atraso diferente (vento e temperatura em ~2 dias, irradiância diária em ~1 semana), então os últimos dias da série têm parte das colunas nula. A coluna diz **quais**, para que um dia sem irradiância não seja confundido com um dia sem nenhuma medição:
+`medidas_faltantes` cobre a outra aproximação, a temporal: a NASA publica cada variável com um atraso diferente (vento e temperatura em ~2 dias, irradiância diária em ~1 semana), então os últimos dias da série podem vir com parte das colunas nula. A coluna diz **quais**, para que um dia sem irradiância não seja confundido com um dia sem nenhuma medição:
 
 ```sql
-SELECT medidas_faltantes, count(*) FROM fato_clima
-WHERE flag_qualidade = 'faltante' GROUP BY 1;
--- irradiancia_kwh_m2                                    | 596
--- irradiancia_kwh_m2,vento_ms,vento_10m_ms,temperatura_c,... | 894
+SELECT flag_qualidade, medidas_faltantes, count(*) FROM fato_clima GROUP BY ALL;
+-- original    | NULL | 28.028
+-- interpolado | NULL |    308
 ```
+
+Na carga de 06/10/2026 não há nenhuma linha `faltante`: a irradiância veio ausente em **um único dia (07/09)**, no meio da série, e um buraco interior de 1 dia é interpolado. Quando a coleta pega a latência no **fim** da série — como na carga de 18/09, que tinha 1.490 linhas `faltante`, das quais 596 só sem irradiância — a interpolação se recusa a extrapolar e a coluna volta a ser preenchida.
 
 ### 6.4 `fato_manutencao` — 159 linhas (**dado simulado**)
 
@@ -531,10 +532,10 @@ Mais o **build-then-swap** ([§10](#10-processo-de-carga-criar_bancopy)): com um
 | 3 | Banco fora do Git (46 MB, gitignorado) | O deploy precisa gerar o arquivo a partir da curated |
 | 4 | Sem histórico: cada carga substitui o banco inteiro | Não dá para comparar versões do dado nem voltar a uma carga anterior |
 | 5 | Metadados de proveniência não ficam no banco | O arquivo não registra de qual coleta ou partição raw ele veio |
-| 6 | 149 unidades sem potência publicada por vínculo ONS × ANEEL parcial (66 `inconsistente` + 83 `sem_vinculo`) e 10 sem clima | Endpoints devolvem campos nulos para elas ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas)) |
+| 6 | 149 unidades sem potência publicada por vínculo ONS × ANEEL parcial (66 `inconsistente` + 83 `sem_vinculo`) | Endpoints devolvem potência, coordenada e data nulas para elas ([ETL §16](../ETL/doc_tecnica_etl.md#16-limitações-conhecidas)). Clima, desde a reingestão dos 19 pontos, todas têm |
 | 7 | Outras 63 unidades (`tipo_unidade = 'pequenas_usinas'`) nunca terão cadastro | São somatórios estaduais de MMGD, não usinas; separáveis por `tipo_unidade` ([§6.1](#61-dim_usina--308-linhas)) |
 | 8 | Os 25 testes ([§15](#15-testes-automatizados)) rodam sobre uma curated de brinquedo | Eles provam que o esquema impõe PK, FK e NOT NULL e que as views calculam o que dizem, não que a carga real está correta — isso é a `validacao` do ETL, que roda antes de gravar |
 
 ---
 
-*Documento gerado em 19/09/2026 a partir do código de `DB/` e do banco criado com a camada curated de 18/09/2026. Revisado em 06/10/2026: testes automatizados (§15) e situação atual das limitações.*
+*Documento gerado em 19/09/2026 a partir do código de `DB/`. Revisado em 06/10/2026 sobre o banco recarregado com a curated do mesmo dia (clima dos 19 pontos da NASA): testes automatizados (§15), contagens e limitações.*

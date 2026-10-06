@@ -335,18 +335,18 @@ Entrada: 1.365.096 linhas (usina/conjunto × hora, jul a set/2026, todas as font
 | Passo | Detalhe |
 |---|---|
 | Parâmetros | `ALLSKY_SFC_SW_DWN` → `irradiancia_wh_m2`, `WS10M` → `vento_10m_ms`, `WS50M` → `vento_50m_ms`, `T2M` → `temperatura_2m_c` |
-| Fill value | `-999` → nulo (20.640 valores na coleta atual) |
+| Fill value | `-999` → nulo (41.952 valores na coleta atual, todos de irradiância) |
 | Tempo | `"AAAAMMDDHH"` → timestamp → `tz_localize("UTC")` + `data_hora_brasilia` |
 | Duplicatas | por (local, hora), via toolkit |
 | Grade + gaps | Igual ao ONS (≤ 3 h interpola; mais que isso, `faltante`) |
 
-**Alerta:** na coleta atual, as 19.200 linhas saem como `faltante`. A **irradiância horária** da NASA é publicada com cerca de **3 meses de atraso** (último valor válido em 30/06/2026), então o período jul a set/2026 inteiro veio `-999` nessa coluna. Vento e temperatura horários estão completos, exceto nas últimas ~48 h. Por isso esta tabela serve para análises horárias de vento e temperatura, e a `fato_clima` usa a **série diária** (7.3).
+**Alerta:** na coleta atual (06/10/2026, 19 locais), as 41.952 linhas saem como `faltante`. A **irradiância horária** da NASA é publicada com cerca de **3 meses de atraso**, então o período jul a set/2026 inteiro veio `-999` nessa coluna. Por isso esta tabela serve para análises horárias de vento e temperatura, e a `fato_clima` usa a **série diária** (7.3).
 
-É justamente aqui que o `flag_qualidade` sozinho engana: 100% das linhas marcadas `faltante`, sendo que em 18.720 delas **só** a irradiância está ausente. A coluna `medidas_faltantes` ([§6.5](#65-listar_faltantesdf-colunas)) separa os dois casos, e o log da etapa passou a imprimir os nulos por medida:
+É justamente aqui que o `flag_qualidade` sozinho engana: 100% das linhas marcadas `faltante`, sendo que em **todas** elas só a irradiância está ausente — vento e temperatura vieram completos até 30/09 23h. A coluna `medidas_faltantes` ([§6.5](#65-listar_faltantesdf-colunas)) separa os dois casos, e o log da etapa imprime os nulos por medida:
 
 ```
-[clean:nasa] nulos por medida: {'irradiancia_wh_m2': 19200, 'vento_10m_ms': 480,
-                                'vento_50m_ms': 480, 'temperatura_2m_c': 480}
+[clean:nasa] nulos por medida: {'irradiancia_wh_m2': 41952, 'vento_10m_ms': 0,
+                                'vento_50m_ms': 0, 'temperatura_2m_c': 0}
 ```
 
 ### 7.3 NASA diária — `clean/nasa.py::limpar_diario` → `nasa_clima_diario.parquet`
@@ -359,7 +359,9 @@ Série criada na ingestão justamente para contornar a latência da irradiância
 | Tempo | `data_lst` (`AAAAMMDD`) → `data`. O dia é em **hora solar local**, a menos de 1 h do horário de Brasília nas longitudes do país |
 | Grade + gaps | Grade diária (`freq="D"`). Buracos de **1 dia** são interpolados (`MAX_GAP_INTERPOLACAO_DIAS = 1`); o resto (latência no fim da série) fica `faltante` |
 
-Resultado: 800 linhas (10 locais × 80 dias). 740 `original`, 10 `interpolado` e 50 `faltante`, todas a partir de 14/09 (latência). Das 50, **20 têm só a irradiância ausente** e 30 não têm nenhuma medida — as duas latências diferentes aparecendo lado a lado, e agora distinguíveis por `medidas_faltantes`.
+Resultado: 1.748 linhas (19 locais × 92 dias, de 01/07 a 30/09/2026). 1.729 `original` e 19 `interpolado`, nenhuma `faltante`.
+
+Os 19 interpolados são o mesmo dia — **07/09** — nos 19 locais: a irradiância diária veio `-999` naquele dia e em nenhum outro. Como é um buraco interior de 1 dia, a regra o preenche. A coleta anterior, de 18/09, pegou a latência no **fim** da série (50 linhas `faltante` a partir de 14/09, 20 delas só sem irradiância): ali não há valor posterior para interpolar e o nulo fica, com `medidas_faltantes` dizendo o que faltou. O resultado depende de onde o buraco cai, e é por isso que as duas colunas existem.
 
 ### 7.4 ANEEL — `clean/aneel.py` → `aneel_usinas.parquet`
 
@@ -410,7 +412,7 @@ Também deriva `tempo_dias = max(round(tempo_anos × 365,25), 1)` (a unidade do 
 ┌─────────▼─────────┐ ┌────────▼────────┐ ┌───────────▼──────────┐
 │   fato_geracao    │ │   fato_clima    │ │   fato_manutencao    │
 │ usina × hora      │ │ usina × dia     │ │ usina (SIMULADO)     │
-│ 575.904 linhas    │ │ 23.840 linhas   │ │ 159 linhas           │
+│ 575.904 linhas    │ │ 28.336 linhas   │ │ 159 linhas           │
 └───────────────────┘ └─────────────────┘ └──────────────────────┘
 
         ponte_usina_aneel (790): usina da ANEEL → usina_id (auditoria + manutenção)
@@ -525,23 +527,25 @@ Uma linha por usina da ANEEL vinculada (790): `ceg_aneel`, `usina_id`, `chave_un
 
 ### 8.5 `fato_clima` — grão usina × dia
 
-A NASA foi coletada em **10 pontos** (`ingestao/nasa_power/locais.csv`), não em cada usina. Cada unidade é associada a um ponto de referência (`_ponto_clima_por_usina`):
+A NASA foi coletada em **19 pontos** (`ingestao/nasa_power/locais.csv`, gerados das coordenadas da ANEEL), não em cada usina. Cada unidade é associada a um ponto de referência (`_ponto_clima_por_usina`):
 
 | Situação da unidade | Regra | `metodo_vinculo_clima` | Unidades |
 |---|---|---|---|
-| Tem `lat`/`lon` | Ponto mais próximo por haversine, até 300 km | `mais_proximo` | 133 |
-| Tem `lat`/`lon`, ponto a mais de 300 km | Mesmo ponto, marcado | `mais_proximo_distante` | 29 |
-| Sem coordenadas | Ponto da mesma UF | `mesma_uf` | 90 |
-| Sem coordenadas nem ponto na UF | Ponto do mesmo subsistema | `mesmo_subsistema` | 46 |
-| Nada disso | Fica sem clima | — | 10 (subsistema Norte, sem ponto NASA) |
+| Tem `lat`/`lon` | Ponto mais próximo por haversine, até 300 km | `mais_proximo` | 158 |
+| Tem `lat`/`lon`, ponto a mais de 300 km | Mesmo ponto, marcado | `mais_proximo_distante` | 4 |
+| Sem coordenadas | Ponto da mesma UF | `mesma_uf` | 124 |
+| Sem coordenadas nem ponto na UF | Ponto do mesmo subsistema | `mesmo_subsistema` | 22 |
+| Nada disso | Fica sem clima | — | 0 |
 
-Distância usina → ponto (com coordenadas): mediana de 100 km, máxima de 834 km.
+Distância usina → ponto, nas 162 unidades com coordenada: **mediana de 65 km e máxima de 456 km**. Com os 10 pontos escolhidos à mão eram 100 km e 834 km, com 29 unidades acima do limiar de 300 km e 10 unidades do Norte sem nenhum ponto — agora são 4 acima do limiar e **nenhuma** sem clima, porque o `locais.csv` gerado da ANEEL inclui um ponto no Maranhão ([ingestão §7.3](../ingestao/doc_tecnica_ingestao.md#73-escolha-dos-locais--locaiscsv)). A capacidade publicada com clima a ≤ 300 km é de **98,0%**.
 
 A série é a **diária** da NASA (clean 7.3) — e não a horária, precisamente por causa da latência de 3 meses da irradiância horária. Ela é renomeada para o vocabulário do DDL: `irradiancia_kwh_m2`, `vento_ms` (**a 50 m**, altura mais próxima do cubo dos aerogeradores), `temperatura_c` (média), mais `vento_10m_ms`, `temperatura_max_c`, `temperatura_min_c`, `flag_qualidade`, `medidas_faltantes`, `local_clima`, `distancia_km` e `metodo_vinculo_clima`. As três últimas deixam a **aproximação espacial** explícita; `medidas_faltantes` deixa explícita a **temporal**.
 
 `medidas_faltantes` é **recalculado** aqui, depois do rename, em vez de ser copiado do clean: quem consome a fato (API, frontend) não deve precisar saber que na camada clean a coluna se chamava `irradiancia_kwh_m2_dia`.
 
-Resultado: 23.840 linhas (298 unidades × 80 dias, de 01/07 a 18/09/2026). 22.052 `original`, 298 `interpolado` e 1.490 `faltante` (latência NASA no fim da série). Dessas 1.490, **596 têm só a irradiância ausente** e 894 não têm nenhuma medida.
+Resultado: **28.336 linhas** (308 unidades × 92 dias, de 01/07 a 30/09/2026), com 28.028 `original` e 308 `interpolado` — **nenhuma** `faltante`.
+
+A ausência de `faltante` é consequência de *onde* caiu o buraco nesta coleta, não de a latência ter desaparecido: a irradiância diária veio `-999` em **um único dia (07/09)**, igual nos 19 pontos, no meio da série. Um buraco interior de 1 dia é exatamente o que `MAX_GAP_INTERPOLACAO_DIAS` autoriza interpolar. Na coleta anterior (18/09) o buraco estava no **fim** da série, onde `limit_area="inside"` se recusa a extrapolar, e por isso sobravam 1.490 linhas `faltante`. A regra é a mesma; o dado é que mudou.
 
 ### 8.6 `fato_manutencao` — grão usina (SIMULADO)
 
@@ -555,7 +559,7 @@ Isso é o "tempo até o primeiro evento de manutenção no complexo", uma defini
 
 Colunas: `usina_id`, `tempo_dias`, `evento_ocorreu` (bool), `data_primeiro_evento`, `tipo_evento`, `n_usinas_consideradas`, `simulado = True`.
 
-Resultado: **159** unidades (as que têm usinas da ANEEL vinculadas, de qualquer qualidade), 134 com evento e 25 censuradas. Mediana de `tempo_dias` = 692, e mediana de 3 usinas por unidade (máximo de 24).
+Resultado: **159** unidades (as que têm usinas da ANEEL vinculadas, de qualquer qualidade), 125 com evento e 34 censuradas. Mediana de `tempo_dias` = 733, e mediana de 3 usinas por unidade (máximo de 24).
 
 > Com o "primeiro evento entre N usinas", conjuntos grandes têm eventos mais cedo e menos censura. Para **treinar e validar** o modelo de sobrevivência, use o arquivo simulado por usina (`dados/simulados/`), cujos parâmetros verdadeiros são conhecidos. A `fato_manutencao` é a visão que a API serve.
 
@@ -714,13 +718,13 @@ Execução de 18/09/2026, partição raw `2026-09-18`.
 | Camada | Arquivo | Linhas | Colunas | Tamanho |
 |---|---|---|---|---|
 | clean | `ons_geracao.parquet` | 1.365.096 | 16 | 5,5 MB |
-| clean | `nasa_clima_horario.parquet` | 19.200 | 13 | 0,1 MB |
-| clean | `nasa_clima_diario.parquet` | 800 | 14 | <0,1 MB |
+| clean | `nasa_clima_horario.parquet` | 41.952 | 14 | 0,2 MB |
+| clean | `nasa_clima_diario.parquet` | 1.748 | 15 | <0,1 MB |
 | clean | `aneel_usinas.parquet` | 20.511 | 28 | 1,0 MB |
 | clean | `manutencao_simulada.parquet` | 1.854 | 15 | 0,1 MB |
 | curated | `dim_usina.parquet` | 308 | 24 | <0,1 MB |
 | curated | `fato_geracao.parquet` | 575.904 | 6 | 2,4 MB |
-| curated | `fato_clima.parquet` | 23.840 | 12 | 0,1 MB |
+| curated | `fato_clima.parquet` | 28.336 | 13 | 0,1 MB |
 | curated | `fato_manutencao.parquet` | 159 | 7 | <0,1 MB |
 | curated | `ponte_usina_aneel.parquet` | 790 | 8 | <0,1 MB |
 
@@ -824,7 +828,7 @@ O que **hoje** limita a camada publicada. Itens já resolvidos saíram desta lis
 | # | Limitação | Impacto |
 |---|---|---|
 | 1 | Vínculo por nome é heurístico: 66 conjuntos `inconsistente` e 83 `sem_vinculo` ([§8.2.3](#823-vínculo-ons--aneel-_vincular)) | 149 unidades sem potência publicada — 48% das 308. A `razao_pico_potencia` detecta o vínculo parcial, mas não o conserta |
-| 2 | Clima de **10 pontos** para 298 unidades: mediana de 100 km e máximo de 834 km até o ponto de referência | Clima regional, não da usina. 90 unidades recebem o ponto da mesma UF e 46 o do subsistema; 29 ficam a mais de 300 km (`mais_proximo_distante`) e 10 do Norte ficam sem clima. O `locais.csv` já tem 19 pontos gerados da ANEEL ([ingestão §7.3](../ingestao/doc_tecnica_ingestao.md#73-escolha-dos-locais--locaiscsv)), mas o bruto da NASA em disco ainda é o dos 10 pontos antigos: a melhora só aparece na curated depois de reingerir a NASA |
+| 2 | Clima de **19 pontos regionais** (um por fonte × UF), não por usina: mediana de 65 km até o ponto de referência ([§8.5](#85-fato_clima--grão-usina--dia)) | 146 das 308 unidades não têm coordenada e recebem o clima da UF (124) ou do subsistema (22); 4 ficam acima dos 300 km do limiar. Um ponto por par (fonte, UF) é a granularidade atual — subir para 2 por grupo daria 37 pontos e mediana de 55 km, ao dobro de chamadas de API |
 | 3 | Irradiância horária da NASA com ~3 meses de atraso | `nasa_clima_horario` sem irradiância no período recente. A `fato_clima` usa a série **diária** por isso |
 | 4 | Dia da NASA diária em hora solar local (≈ Brasília, com até ~1 h de diferença) | Desalinhamento mínimo na borda do dia; aceito |
 | 5 | Agregados "Pequenas Usinas" (63) não têm cadastro na ANEEL **por natureza** — são somatórios estaduais de MMGD ([§8.2.1](#821-a-decisão-de-grão)) | Sem potência, localização nem manutenção, carregando **32% da energia medida**. São separáveis por `tipo_unidade` (filtro na API, filtro no painel e aviso próprio na página da unidade), e os endpoints de estimativa respondem 404 dizendo que o grão é agregado, não que o vínculo falhou |

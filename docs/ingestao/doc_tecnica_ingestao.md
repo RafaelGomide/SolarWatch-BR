@@ -35,13 +35,15 @@ As três fontes são **públicas, gratuitas e sem autenticação**, o que é con
 
 O objetivo analítico é cruzar **o que foi gerado** (ONS) com **as condições climáticas que explicam a geração** (NASA) e **a capacidade instalada que poderia ter gerado** (ANEEL). Com isso ficam possíveis o fator de capacidade, a previsão de geração e a análise de sobrevivência de ativos.
 
-### Volume da última execução (18/09/2026)
+### Volume da última execução
+
+ONS e ANEEL são da coleta de 18/09/2026; a NASA foi **reingerida em 06/10/2026** com os 19 pontos gerados do cadastro ([§7.3](#73-escolha-dos-locais--locaiscsv)), e por isso está numa partição raw própria (`dados/bruto/2026-10-06/`).
 
 | Arquivo | Linhas | Tamanho (Parquet) | Tamanho equivalente em CSV | Período |
 |---|---|---|---|---|
 | `dados_ons_bruto/` (3 arquivos mensais) | 1.365.096 | ~10,4 MB | ~214 MB | 01/07/2026 00h → 17/09/2026 23h |
-| `dados_nasa_bruto.parquet` | 19.200 | ~0,1 MB | ~1,5 MB | 01/07/2026 00h → 18/09/2026 23h (UTC), 10 locais |
-| `dados_nasa_diario_bruto.parquet` | 800 | <0,1 MB | — | 01/07/2026 → 18/09/2026 (dias LST), 10 locais |
+| `dados_nasa_bruto.parquet` | 41.952 | ~0,2 MB | ~3,2 MB | 01/07/2026 00h → 30/09/2026 23h (UTC), **19 locais** |
+| `dados_nasa_diario_bruto.parquet` | 1.748 | <0,1 MB | — | 01/07/2026 → 30/09/2026 (dias LST), **19 locais** |
 | `dados_aneel_bruto.parquet` | 20.511 | ~0,8 MB | ~6 MB | retrato do cadastro em 18/09/2026 (arquivado também em `historico_aneel/dados_aneel_bruto_2026-09-18.parquet`) |
 
 A camada bruta começou em CSV e foi migrada para Parquet. Veja a [§4.5](#45-formato-de-saída-parquet).
@@ -475,6 +477,8 @@ Colunas do arquivo: `local, municipio, id_estado, id_subsistema, fonte_predomina
 - Editar o CSV à mão continua funcionando — o código não tem nenhum local fixo —, mas a próxima execução de `gerar_locais` sobrescreve.
 - **Trocar o `locais.csv` invalida o clima já ingerido:** os pontos antigos não existem na nova coleta. Rode de novo a ingestão da NASA, e depois o ETL, para o `fato_clima` refletir os pontos novos.
 
+**Resultado medido na camada curada** (reingestão de 06/10/2026, período 2026-07 a 2026-09): a `fato_clima` passou a ter 19 locais, a distância mediana unidade → ponto caiu de 100 km para **65 km**, a máxima de 834 km para **456 km**, as unidades acima do limiar de 300 km caíram de 29 para **4** e as 10 unidades do Norte que ficavam **sem clima** passaram a ter — o ponto de Paulino Neves (MA) cobre o subsistema Norte, que não tinha nenhum ponto na lista manual. Ver [ETL §8.5](../ETL/doc_tecnica_etl.md#85-fato_clima--grão-usina--dia).
+
 ### 7.4 Fluxo de execução
 
 ```
@@ -830,7 +834,7 @@ O que **hoje** limita a ingestão. Os itens resolvidos ao longo do projeto (um P
 
 | # | Limitação | Impacto |
 |---|---|---|
-| 1 | Um ponto de clima por (fonte, UF): 19 pontos no `locais.csv` ([§7.3](#73-escolha-dos-locais--locaiscsv)) | Clima **regional**, não por usina. Além disso, o bruto da NASA em disco ainda é o dos 10 pontos antigos — a cobertura de 96,5% da capacidade a ≤ 300 km só chega à camada curada depois de reingerir a NASA com o `locais.csv` novo |
+| 1 | Um ponto de clima por (fonte, UF): 19 pontos no `locais.csv` ([§7.3](#73-escolha-dos-locais--locaiscsv)) | Clima **regional**, não por usina: a mediana unidade → ponto é de 65 km e 146 unidades sem coordenada recebem o clima da UF ou do subsistema. Subir para 2 pontos por grupo daria mediana de 55 km ao dobro de chamadas de API |
 | 2 | Latência desigual da NASA: vento e temperatura ~2 dias, irradiância diária ~1 semana, horária ~3 meses | A janela recente vem sem parte das variáveis. Tratado, não eliminado: `-999` vira nulo com flag `faltante`, `medidas_faltantes` diz **quais** variáveis faltaram, a `fato_clima` usa a série diária e o frontend escreve a ressalva na tela. Análises horárias de irradiância precisam de janelas com mais de 3 meses |
 | 3 | Só **um** retrato da ANEEL arquivado em `historico_aneel/` ([§8.5](#85-retratos-datados--historico_aneel)) | `--mudancas-de-fase` já compara dois retratos, mas ainda não há série histórica: a transição `Construção → Operação` como evento real datado só existirá depois de execuções periódicas |
 | 4 | Os 101 testes ([§11](#11-testes-automatizados)) não detectam mudança de contrato nas APIs públicas | Se a ANEEL renomear uma coluna ou a NASA mudar o formato, a suíte continua verde: ela testa o nosso código contra o formato **conhecido** |
