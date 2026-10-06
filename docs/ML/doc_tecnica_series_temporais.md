@@ -230,42 +230,55 @@ O sMAPE sofre do mesmo problema: com `y = 0` e `ŷ > 0`, cada ponto vale 200%. N
 
 ## 9. Resultados
 
-Execução de 19/09/2026: 6 janelas, horizonte de 24 h, 144 horas avaliadas por série.
+Execução de 06/10/2026 (retreino com o clima dos 19 pontos): 6 janelas, horizonte de 24 h, 144 horas avaliadas por série.
 
 ### 9.1 Tabela comparativa
 
 | Série | Modelo | RMSE | MAE | MAPE | sMAPE | nRMSE | Viés | Ganho vs. baseline | s/ajuste |
 |---|---|---|---|---|---|---|---|---|---|
-| eólica | **gradient_boosting** | **1.904** | 1.494 | 13,0% | 12,4% | 12,1% | +297 | **+30,7%** | 2,9 |
-| eólica | sarima | 2.114 | 1.635 | 17,1% | 14,4% | 13,5% | −75 | +23,0% | 29,5 |
-| eólica | media_movel_sazonal | 2.386 | 1.850 | 21,0% | 16,5% | 15,2% | −454 | +13,1% | 0,03 |
-| eólica | naive_sazonal | 2.747 | 2.142 | 19,9% | 19,3% | 17,5% | +167 | — | 0,01 |
-| solar | **gradient_boosting** | **1.079** | 666 | 5,7% | 5,7% | 8,0% | −143 | **+46,8%** | 2,2 |
-| solar | media_movel_sazonal | 1.414 | 776 | 6,2% | 6,3% | 10,5% | +206 | +30,3% | 0,02 |
-| solar | sarima | 1.601 | 891 | 7,1% | 7,1% | 11,9% | −11 | +21,0% | 25,8 |
+| eólica | **gradient_boosting** | **1.701** | 1.361 | 11,9% | 10,9% | 10,9% | +135 | **+38,1%** | 3,3 |
+| eólica | sarima | 2.114 | 1.635 | 17,1% | 14,4% | 13,5% | −75 | +23,0% | 23,9 |
+| eólica | media_movel_sazonal | 2.386 | 1.850 | 21,0% | 16,5% | 15,2% | −454 | +13,1% | 0,02 |
+| eólica | naive_sazonal | 2.747 | 2.142 | 19,9% | 19,3% | 17,5% | +167 | — | 0,00 |
+| solar | **gradient_boosting** | **832** | 519 | 4,8% | 4,7% | 6,2% | −65 | **+59,0%** | 0,8 |
+| solar | media_movel_sazonal | 1.414 | 776 | 6,2% | 6,3% | 10,5% | +206 | +30,3% | 0,01 |
+| solar | sarima | 1.601 | 891 | 7,1% | 7,1% | 11,9% | −11 | +21,0% | 11,2 |
 | solar | naive_sazonal | 2.027 | 1.132 | 8,8% | 8,7% | 15,0% | −161 | — | 0,00 |
 
 Leitura:
 
-1. **O Gradient Boosting vence nas duas fontes**, com 30,7% e 46,8% menos RMSE que o baseline — o resultado que o escopo previa para dados com várias exógenas.
+1. **O Gradient Boosting vence nas duas fontes**, com 38,1% e 59,0% menos RMSE que o baseline — o resultado que o escopo previa para dados com várias exógenas.
 2. **A ordem dos outros modelos muda por fonte.** Na eólica, o SARIMA fica em segundo; na solar, ele perde até para a média móvel. Faz sentido: a curva solar é quase determinística (nasce e põe o sol), então repetir a média dos últimos dias já é forte, enquanto o SARIMA gasta graus de liberdade tentando modelar a dinâmica.
-3. **Custo:** o Gradient Boosting treina em ~2 s e o SARIMA em ~26–30 s, ou seja, é **10× mais rápido e mais preciso**.
-4. **Viés:** todos pequenos perto do RMSE. O Gradient Boosting subestima a eólica em ~297 MWh/h (2% da média).
+3. **Custo:** o Gradient Boosting treina em ~1–3 s e o SARIMA em ~11–24 s, ou seja, é bem mais rápido **e** mais preciso.
+4. **Viés:** todos pequenos perto do RMSE. O Gradient Boosting subestima a eólica em ~135 MWh/h (1% da média).
+
+### 9.1.1 O efeito do clima novo (antes × depois)
+
+Os três baselines **não usam clima**, e por isso saíram com RMSE idêntico ao da execução de 19/09 — o que faz desta comparação um teste controlado: a única coisa que mudou foi o clima que entra no Gradient Boosting ([ETL §8.5](../ETL/doc_tecnica_etl.md#85-fato_clima--grão-usina--dia)).
+
+| Série | GB com clima de 10 pontos | GB com clima de 19 pontos | **Sem nenhuma coluna de clima** |
+|---|---|---|---|
+| eólica | 1.904 | **1.701** (−10,7%) | 2.235 |
+| solar | 1.079 | **832** (−22,9%) | 1.058 |
+
+A terceira coluna é uma ablação: o mesmo backtesting com as colunas de clima removidas da série. Ela mostra o que o número agregado escondia — **o clima dos 10 pontos não valia nada na solar** (1.079 com clima contra 1.058 sem, diferença dentro do ruído de 6 janelas), enquanto o dos 19 pontos vale **21%** de RMSE. Na eólica o clima já ajudava (2.235 → 1.904, 14,8%) e passou a ajudar mais (→ 1.701, 23,9%).
+
+A explicação é espacial: com 10 pontos escolhidos à mão, a média por fonte misturava parques a 800 km do ponto de medição e deixava o subsistema Norte sem clima nenhum; com 19 pontos derivados das coordenadas das usinas, a mediana usina → ponto caiu de 100 km para 65 km e todas as 308 unidades entraram na média.
 
 ### 9.2 Estabilidade entre janelas (RMSE por janela)
 
 | Série | Modelo | Média | Desvio | Mín | Máx |
 |---|---|---|---|---|---|
-| eólica | gradient_boosting | 1.835 | **557** | 1.241 | 2.495 |
+| eólica | gradient_boosting | 1.674 | **333** | 1.284 | 2.271 |
 | eólica | sarima | 1.975 | 826 | 975 | 3.067 |
 | eólica | media_movel_sazonal | 2.210 | 987 | 1.200 | 3.634 |
 | eólica | naive_sazonal | 2.542 | 1.141 | 1.237 | 3.901 |
-| solar | gradient_boosting | 1.062 | **213** | 710 | 1.259 |
+| solar | gradient_boosting | 825 | **122** | 654 | 1.001 |
 | solar | media_movel_sazonal | 1.266 | 690 | 580 | 2.261 |
 | solar | sarima | 1.468 | 700 | 630 | 2.597 |
 | solar | naive_sazonal | 1.884 | 820 | 781 | 3.057 |
 
-Além de ter o menor erro, o Gradient Boosting é o **mais estável**: na solar, o desvio entre janelas é de 213 contra 690–820 dos outros. Em produção isso importa tanto quanto a média, porque erro imprevisível é pior que erro constante.
+Além de ter o menor erro, o Gradient Boosting é o **mais estável**: na solar, o desvio entre janelas é de 122 contra 690–820 dos outros. Em produção isso importa tanto quanto a média, porque erro imprevisível é pior que erro constante. O clima novo melhorou as duas pontas: o desvio da solar caiu de 213 para 122 e o da eólica de 557 para 333, e a pior janela da solar passou de 1.259 para 1.001.
 
 > Atenção: são só 6 janelas. O desvio acima é indicativo, não um intervalo de confiança.
 
@@ -283,19 +296,15 @@ Importância por permutação (`GradientBoosting.importancias`), em % do total:
 
 | Série | 1º | 2º | 3º | Clima (soma) |
 |---|---|---|---|---|
-| solar | `lag_24h` 84,9% | `hora_cos` 7,1% | `lag_168h` 6,4% | **0,4%** |
-| eólica | `hora_cos` 49,8% | `lag_24h` 26,2% | **`vento_ms` 11,2%** | **12,4%** |
+| solar | `lag_24h` 82,5% | `hora_cos` 8,7% | `lag_168h` 6,8% | **0,4%** |
+| eólica | `hora_cos` 57,3% | `lag_24h` 17,9% | **`vento_ms` 13,4%** | **14,0%** |
 
-Duas conclusões:
+- **Na eólica o clima ajuda, e de forma visível:** o vento a 50 m sozinho responde por 13,4% da importância (eram 11,2% com os 10 pontos). É o efeito esperado de uma exógena física relevante.
+- **Na solar a importância do clima continua em 0,4%** — e aqui está a lição metodológica deste retreino: **esse número está errado como medida de utilidade.** A ablação da [§9.1.1](#911-o-efeito-do-clima-novo-antes--depois) mostra que remover as colunas de clima piora o RMSE da solar em 21%, ou seja, o clima vale um quinto do erro. A permutação não vê isso porque é medida **dentro da amostra**, num modelo em que `lag_24h` carrega 82% da explicação: embaralhar a irradiância quase não muda o ajuste in-sample, mas treinar sem ela muda a previsão fora da amostra.
 
-- **Na eólica o clima ajuda:** o vento a 50 m sozinho responde por 11,2% da importância. É o efeito esperado de uma exógena física relevante.
-- **Na solar o clima é quase irrelevante (0,4%),** o que à primeira vista surpreende, já que irradiância explica geração solar. A explicação está na granularidade: a irradiância é **diária** e vem da média dos pontos da NASA, então ela é idêntica nas 24 horas do dia e quase não varia entre dias nublados e claros quando se olha o país inteiro. A hora do dia (`hora_cos`) e a geração de ontem já carregam quase toda a informação.
+> Moral: importância por permutação in-sample responde "de que o modelo já ajustado depende para reproduzir o treino", não "que features valem a pena coletar". A segunda pergunta se responde com ablação no backtesting, e as duas podem discordar por duas ordens de grandeza — como aqui.
 
-> Esta medição é do modelo treinado com os **10 pontos** de clima antigos. Desde 06/10/2026 o banco tem 19 pontos, com a distância mediana usina → ponto caindo de 100 km para 65 km; o número só muda depois de retreinar (`python -m ML.series_temporais.treinar`).
-
-> A importância foi medida **dentro da amostra de treino**, então serve para entender o modelo, não como evidência de desempenho. A comparação honesta de desempenho é o backtesting.
-
-Esse resultado motiva o item 1 da [§15](#15-limitações-conhecidas): usar clima **horário e por usina** deve mudar bastante o quadro da solar.
+Isso reforça o item 1 da [§15](#15-limitações-conhecidas): o ganho da solar veio só de aproximar o ponto de medição (100 km → 65 km de mediana). Clima **horário e por usina** é o próximo degrau, e a granularidade diária continua sendo o teto: a irradiância é idêntica nas 24 horas do dia.
 
 ---
 
@@ -316,7 +325,7 @@ O pickle é gravado por `ds_toolkit.salvar_modelo` (joblib), que já anexa o `.m
   "serie": "solar", "modelo": "gradient_boosting", "horizonte_h": 24,
   "treino_inicio": "2026-07-01 00:00:00-03:00", "treino_fim": "2026-09-17 23:00:00-03:00",
   "n_observacoes": 1896,
-  "metricas_backtesting": {"rmse": 1079.2, "mae": 666.0, "mape_%": 5.74, "nrmse_%": 7.99, "ganho_vs_baseline_%": 46.77},
+  "metricas_backtesting": {"rmse": 832.2, "mae": 519.1, "mape_%": 4.76, "nrmse_%": 6.16, "ganho_vs_baseline_%": 58.95},
   "exogenas": ["irradiancia_kwh_m2", "vento_ms", "temperatura_c", "temperatura_max_c", "temperatura_min_c"],
   "observacao": "Clima do horizonte tratado como conhecido (ver features.py)."
 }
@@ -385,7 +394,7 @@ As métricas têm testes próprios porque é onde o número engana: o **MAPE ign
 
 | # | Limitação | Impacto |
 |---|---|---|
-| 1 | Clima **diário** e regional (19 pontos desde 06/10/2026, mediana de 65 km) | Na solar o clima ficou quase inútil: 0,4% da importância ([§10](#10-importância-das-features)) — medido com os 10 pontos anteriores. A granularidade diária é o limite de fundo: a irradiância é idêntica nas 24 horas do dia. Os modelos em produção ainda são os treinados com o clima antigo |
+| 1 | Clima **diário** e regional: 19 pontos, um por (fonte, UF), com mediana de 65 km até a usina | A granularidade diária é o teto — a irradiância é idêntica nas 24 horas do dia. Aproximar o ponto de 100 km para 65 km já valeu 23% de RMSE na solar e 11% na eólica ([§9.1.1](#911-o-efeito-do-clima-novo-antes--depois)); clima horário e por usina é o degrau seguinte |
 | 2 | Histórico de 79 dias | Sem sazonalidade anual; o modelo pode degradar fora da janela observada e a sazonalidade semanal é frágil |
 | 3 | Hiperparâmetros fixos | O Gradient Boosting não foi otimizado — qualquer otimização precisaria de validação temporal (`TimeSeriesSplit`), nunca `KFold` comum |
 | 4 | Sem intervalo de previsão | A API devolve só o valor pontual |
@@ -397,4 +406,4 @@ As métricas têm testes próprios porque é onde o número engana: o **MAPE ign
 
 ---
 
-*Documento gerado em 19/09/2026 a partir do código de `ML/series_temporais/` e da execução real do backtesting (6 janelas, dados do banco de 18/09/2026). Revisado em 06/10/2026: testes automatizados (§14) e situação atual das limitações.*
+*Documento gerado em 19/09/2026 a partir do código de `ML/series_temporais/`. Revisado em 06/10/2026 sobre o **retreino** com o clima dos 19 pontos da NASA: resultados do backtesting (§9), importâncias (§10), testes automatizados (§14) e limitações.*

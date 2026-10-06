@@ -189,7 +189,7 @@ Previsão de 24 h da geração agregada da fonte — **esta é a previsão que o
   "fonte": "solar", "modelo": "gradient_boosting", "horizonte_h": 24,
   "origem": "2026-09-17T23:00:00-03:00", "metodo": "modelo_por_fonte",
   "premissa_clima": "O clima do horizonte é aproximado pelo último dia observado: em produção entraria uma previsão meteorológica.",
-  "metricas_backtesting": {"rmse": 1079.2, "mae": 666.0, "mape_%": 5.74, "ganho_vs_baseline_%": 46.77, "janelas": 6},
+  "metricas_backtesting": {"rmse": 832.2, "mae": 519.1, "mape_%": 4.76, "ganho_vs_baseline_%": 58.95, "janelas": 6},
   "data": [{"timestamp": "2026-09-18T00:00:00-03:00", "energia_mwh_prevista": 60.36}, "..."]
 }
 ```

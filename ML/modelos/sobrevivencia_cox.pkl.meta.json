@@ -1,11 +1,11 @@
 {
-  "salvo_em": "2026-09-30T18:59:12",
+  "salvo_em": "2026-10-06T19:30:32",
   "classe": "PrevisorSobrevivencia",
   "sklearn_versao": "1.9.0",
   "pandas_versao": "2.3.3",
   "tipo": "sobrevivencia_manutencao",
   "modelo": "cox_ph_estratificado_por_fonte",
-  "treinado_em": "2026-09-30T18:59:09",
+  "treinado_em": "2026-10-06T19:30:30",
   "origem_treino": "eventos_manutencao_simulados.parquet",
   "dado_simulado": true,
   "n_usinas_treino": 1854,
