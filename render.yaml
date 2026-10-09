@@ -1,0 +1,53 @@
+# Render Blueprint — SolarWatch BR
+#
+# Painel do Render: New → Blueprint → aponte para este repositório.
+#
+# O banco (`DB/solarwatch.duckdb`, 46 MB) NÃO é versionado: ele é reconstruído no
+# build a partir da camada curated, que está no repositório. Nada de ingestão nem
+# de treino roda aqui — a API sobe lendo o banco do build e os pickles versionados
+# em `ML/modelos/`. Em runtime o banco é aberto read-only (system design §2.4).
+#
+# Disco efêmero e instância única são premissas do desenho, não limitações do
+# plano: o dado só muda quando o ETL roda localmente e um novo deploy é feito.
+#
+# Medido localmente, com os modelos carregados e todos os endpoints exercitados:
+# ~304 MB de working set, contra os 512 MB do plano free. A folga não é grande
+# porque desempilhar os pickles carrega sklearn, lifelines, statsmodels, scipy,
+# matplotlib e seaborn — é por isso que o requirements.txt inteiro é necessário
+# em runtime, não só as dependências da API.
+
+services:
+  - type: web
+    name: solarwatch-br
+    runtime: python
+    plan: free
+    region: virginia            # a mais próxima do Brasil entre as do plano free
+    branch: main
+    healthCheckPath: /health    # responde sem depender dos modelos de ML
+
+    buildCommand: pip install -r requirements.txt && python -m DB.criar_banco
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --workers 1
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.5"
+      - key: PYTHONUNBUFFERED      # logs JSON saem na hora, sem buffer
+        value: "1"
+      - key: SOLARWATCH_AMBIENTE
+        value: producao
+      # CORS explícito, nunca "*" (system design §11, API8). O painel é servido
+      # pelo próprio backend em /app, então mesma origem; a lista existe para
+      # quem consumir a API de fora. Formato: JSON (pydantic-settings).
+      - key: SOLARWATCH_ORIGENS_PERMITIDAS
+        value: '["https://solarwatch-br.onrender.com"]'
+      # Token bucket em memória do processo: coerente com uma instância só.
+      - key: SOLARWATCH_RATE_LIMIT
+        value: 60/minute
+      - key: SOLARWATCH_LIMITE_PADRAO_PAGINA
+        value: "50"
+      - key: SOLARWATCH_LIMITE_MAXIMO_PAGINA
+        value: "200"
+      # Janela máxima de /geracao e /clima, em dias: protege a CPU escassa do
+      # free tier de uma varredura da base inteira por requisição.
+      - key: SOLARWATCH_MAXIMO_DIAS_SERIE
+        value: "120"
