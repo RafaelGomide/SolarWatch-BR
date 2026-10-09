@@ -16,11 +16,25 @@
   <img alt="licença" src="https://img.shields.io/badge/licen%C3%A7a-MIT-blue">
 </p>
 
+<p align="center">
+  <a href="https://solarwatch-br.onrender.com/app/"><img alt="Painel ao vivo" src="https://img.shields.io/badge/%E2%96%B6%20painel%20ao%20vivo-solarwatch--br.onrender.com-2ea44f?style=for-the-badge"></a>
+  <a href="https://solarwatch-br.onrender.com/docs"><img alt="API" src="https://img.shields.io/badge/API%20interativa-%2Fdocs-009688?style=for-the-badge&logo=fastapi&logoColor=white"></a>
+</p>
+
+<p align="center">
+  <sub>Hospedado no plano gratuito do Render, que suspende a instância após inatividade:<br>
+  se for a primeira visita em algumas horas, a página leva ~1 minuto para acordar.</sub>
+</p>
+
 ---
 
 O ONS publica **quanto cada unidade gerou**, hora a hora, mas sem coordenadas e quase sempre por *conjunto* de usinas. A ANEEL cadastra **cada usina individualmente**, com potência e localização, mas não tem geração. A NASA POWER dá **clima por coordenada**, e não sabe o que é uma usina.
 
 Nenhuma das três conversa com as outras. Este projeto faz essa conversa acontecer — e, mais importante, **declara no próprio dado o quanto cada aproximação é confiável**.
+
+[![Painel do SolarWatch BR](docs/img/painel.png)](https://solarwatch-br.onrender.com/app/)
+
+<sub>O painel em produção: KPIs nacionais, geração diária do SIN por fonte e, abaixo, previsão de 24 h e a lista de unidades com filtros.</sub>
 
 ![Arquitetura](System%20design/arquitetura-solarwatch.png)
 
@@ -42,15 +56,15 @@ Nenhuma das três conversa com as outras. Este projeto faz essa conversa acontec
 
 ## O que dá para perguntar
 
-| Pergunta | Onde |
-|---|---|
-| Quanto esta usina gerou ontem, hora a hora? | `GET /usinas/{id}/geracao` |
-| Qual era o vento e a temperatura por perto, e a quantos km? | `GET /usinas/{id}/clima` |
-| Quanto o país vai gerar nas próximas 24 h? | `GET /geracao/previsao` |
-| Qual a chance desta usina passar 12 meses sem manutenção corretiva? | `GET /usinas/{id}/sobrevivencia` |
-| Quantas manutenções esperar nesse período? | `GET /usinas/{id}/recorrencia` |
+| Pergunta | Endpoint | Experimente |
+|---|---|---|
+| Quanto esta usina gerou, hora a hora? | `GET /usinas/{id}/geracao` | [▶](https://solarwatch-br.onrender.com/api/v1/usinas/12/geracao?inicio=2026-09-10&fim=2026-09-17) |
+| Qual era o vento e a temperatura por perto, e a quantos km? | `GET /usinas/{id}/clima` | [▶](https://solarwatch-br.onrender.com/api/v1/usinas/12/clima) |
+| Quanto o país vai gerar nas próximas 24 h? | `GET /geracao/previsao` | [▶](https://solarwatch-br.onrender.com/api/v1/geracao/previsao?fonte=solar) |
+| Qual a chance desta usina passar 12 meses sem manutenção? | `GET /usinas/{id}/sobrevivencia` | [▶](https://solarwatch-br.onrender.com/api/v1/usinas/12/sobrevivencia) |
+| Quantas manutenções esperar nesse período? | `GET /usinas/{id}/recorrencia` | [▶](https://solarwatch-br.onrender.com/api/v1/usinas/12/recorrencia) |
 
-Tudo somente leitura, paginado por cursor, com erros em [Problem Details (RFC 9457)](https://www.rfc-editor.org/rfc/rfc9457), rate limit por IP, `/health`, `/metrics` no formato Prometheus e OpenAPI gerado do código em `/docs`.
+Tudo somente leitura, paginado por cursor, com erros em [Problem Details (RFC 9457)](https://www.rfc-editor.org/rfc/rfc9457), rate limit por IP, [`/health`](https://solarwatch-br.onrender.com/health), [`/metrics`](https://solarwatch-br.onrender.com/metrics) no formato Prometheus e OpenAPI gerado do código em [`/docs`](https://solarwatch-br.onrender.com/docs).
 
 ## Cinco decisões que explicam o projeto
 
@@ -91,11 +105,17 @@ O módulo vai além do primeiro evento: **Andersen-Gill**, **PWP** e a **Funçã
 
 ## O painel
 
+🔗 **[solarwatch-br.onrender.com/app](https://solarwatch-br.onrender.com/app/)**
+
 Três páginas em HTML, CSS e JavaScript puros — **zero dependências, zero build step** — servidas pelo próprio backend em `/app`:
 
 - **painel:** KPIs nacionais, geração diária do SIN, previsão de 24 h e a lista de unidades com filtros de fonte, tipo e subsistema;
 - **usina:** cadastro, série horária, clima com a distância do ponto de medição, previsão e dois cards de manutenção (probabilidade e contagem esperada);
 - **metodologia:** por que algumas usinas aparecem "sem cadastro", como os buracos de série são tratados e o que é simulado.
+
+[![Página de uma usina](docs/img/usina.png)](https://solarwatch-br.onrender.com/app/usina.html?id=12)
+
+<sub>Os dois cards de manutenção de um conjunto eólico de 12 anos — probabilidade de sobreviver sem manutenção e número esperado de manutenções, cada um com o aviso de dado simulado que a própria API devolve. Esta é a usina do bug da extrapolação: note o <code>weibull</code> como método.</sub>
 
 Gráficos SVG escritos à mão (`js/graficos.js`), tema claro/escuro, formatação `Intl` em pt-BR e estados de erro que mostram a mensagem da API em vez de uma tela em branco.
 
@@ -168,7 +188,9 @@ startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 healthCheckPath: /health
 ```
 
-Nenhuma ingestão e nenhum treino rodam no deploy — a API sobe lendo o banco do build e os modelos versionados, o que torna o processo determinístico e independente das APIs externas. Medido num checkout limpo: **~304 MB** de memória com tudo carregado (contra 512 MB do plano gratuito) e **~25 s** de carga dos modelos no cold start.
+Nenhuma ingestão e nenhum treino rodam no deploy — a API sobe lendo o banco do build e os modelos versionados, o que torna o processo determinístico e independente das APIs externas.
+
+**No ar em [solarwatch-br.onrender.com](https://solarwatch-br.onrender.com/app/)**, no plano gratuito: instância única, 512 MB de RAM (o processo usa ~304 MB com os quatro modelos carregados) e disco efêmero — coerente com um banco read-only que só muda quando o ETL roda e um novo deploy é feito. Com a instância quente, os endpoints respondem entre 0,3 e 0,6 s, inclusive os de ML; depois de um período de inatividade, a primeira requisição paga ~1 minuto de *cold start*.
 
 ## Documentação técnica
 
@@ -208,6 +230,6 @@ Cada documento termina com uma seção de **limitações conhecidas** — o que 
 
 It ships two ML products: a 24-hour generation forecast (Gradient Boosting, validated by rolling-origin backtesting — RMSE 832 MWh/h for solar, 59% below the seasonal baseline) and an asset-survival model (stratified Cox + Weibull AFT, plus Andersen-Gill/PWP recurrent-event models). Maintenance events are **synthetic** — no public O&M dataset exists for Brazilian plants — and every API response says so.
 
-549 automated tests, none touching the network; eight technical documents, each ending with measured limitations; deployable as a single free-tier instance via `render.yaml`.
+549 automated tests, none touching the network; eight technical documents, each ending with measured limitations; deployed as a single free-tier instance via `render.yaml` — **live at [solarwatch-br.onrender.com/app](https://solarwatch-br.onrender.com/app/)** (first visit may take ~1 min to wake the instance).
 
 </details>
